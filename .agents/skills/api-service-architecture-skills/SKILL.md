@@ -61,7 +61,8 @@ Khi người dùng yêu cầu tạo tính năng mới (ví dụ: Chuyển đổi
 - Thư mục: `FileConverterService.Application/`
 - Định nghĩa DTOs cho Request và Response.
 - Định nghĩa Interface cho nghiệp vụ (ví dụ: `IFileConverterService`, `IGotenbergClient`).
-- Xây dựng Use Cases / Business Services (hoặc MediatR Handlers nếu có áp dụng CQRS).
+- Xây dựng Use Cases / MediatR Handlers (theo chuẩn Clean Architecture / CQRS).
+- **Quy tắc Validation:** Mọi Validator kế thừa `AbstractValidator<T>` **bắt buộc** phải sử dụng chuỗi thông báo lỗi tập trung tại `FileConverterService.Application.Constants.BussinessRuleMessage` (không hardcode chuỗi thông báo trong validator).
 
 ### Bước 3: Hiện thực hóa tại Infrastructure
 - Thư mục: `FileConverterService.Infrastructure/`

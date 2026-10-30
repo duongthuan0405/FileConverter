@@ -1,3 +1,5 @@
+using FileConverterService.Api.Middlewares;
+using FileConverterService.Api.Registrations;
 
 namespace FileConverterService.Api
 {
@@ -13,7 +15,13 @@ namespace FileConverterService.Api
             // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
             builder.Services.AddOpenApi();
 
+            builder.Services.RegisterUseCasesHandlers();
+            builder.Services.AddTransient<GlobalExceptionHandlerMiddleware>();
+
             var app = builder.Build();
+
+            // Sử dụng Global Exception Handler Middleware ở đầu pipeline
+            app.UseMiddleware<GlobalExceptionHandlerMiddleware>();
 
             // Configure the HTTP request pipeline.
             if (app.Environment.IsDevelopment())
@@ -24,7 +32,6 @@ namespace FileConverterService.Api
             app.UseHttpsRedirection();
 
             app.UseAuthorization();
-
 
             app.MapControllers();
 

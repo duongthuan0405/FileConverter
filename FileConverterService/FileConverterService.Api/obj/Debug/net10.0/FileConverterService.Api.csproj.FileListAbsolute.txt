@@ -32,3 +32,13 @@ D:\Projects\FileConverter\FileConverterService\FileConverterService.Api\obj\Debu
 D:\Projects\FileConverter\FileConverterService\FileConverterService.Api\obj\Debug\net10.0\FileConverterService.Api.pdb
 D:\Projects\FileConverter\FileConverterService\FileConverterService.Api\obj\Debug\net10.0\FileConverterService.Api.genruntimeconfig.cache
 D:\Projects\FileConverter\FileConverterService\FileConverterService.Api\obj\Debug\net10.0\ref\FileConverterService.Api.dll
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Api\bin\Debug\net10.0\FileConverterService.Application.dll
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Api\bin\Debug\net10.0\FileConverterService.Domain.dll
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Api\bin\Debug\net10.0\FileConverterService.Infrastructure.dll
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Api\bin\Debug\net10.0\FileConverterService.Application.pdb
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Api\bin\Debug\net10.0\FileConverterService.Infrastructure.pdb
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Api\bin\Debug\net10.0\FileConverterService.Domain.pdb
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Api\bin\Debug\net10.0\MediatR.dll
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Api\bin\Debug\net10.0\MediatR.Contracts.dll
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Api\bin\Debug\net10.0\FluentValidation.dll
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Api\bin\Debug\net10.0\FluentValidation.DependencyInjectionExtensions.dll

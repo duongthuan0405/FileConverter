@@ -1,0 +1,27 @@
+{
+  "BusinessFlowSettings": {
+    "Validation": {
+      "MaxFileSizeBytes": 52428800,
+      "AllowedExtensions": [
+        ".docx",
+        ".doc",
+        ".xlsx",
+        ".xls",
+        ".pptx",
+        ".ppt",
+        ".txt",
+        ".html"
+      ],
+      "CheckMagicBytes": true
+    },
+    "Execution": {
+      "TimeoutSeconds": 120,
+      "MaxConcurrentConversions": 10,
+      "EnableTempFileDiskBuffering": false
+    },
+    "RetryPolicy": {
+      "MaxRetryAttempts": 2,
+      "BackoffBaseSeconds": 1
+    }
+  }
+}

@@ -1,4 +1,5 @@
 using FileConverterService.Api.ApiResponseModels;
+using FileConverterService.Application.BusinessExceptions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ApiExplorer;
 
