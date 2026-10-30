@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="FileConverterService.Api/FileConverterService.Api.csproj" />
+  <Project Path="FileConverterService.Application/FileConverterService.Application.csproj" Id="d82a26bb-e6dd-46ec-86a2-f519daa47b8f" />
+  <Project Path="FileConverterService.Domain/FileConverterService.Domain.csproj" Id="99ecb383-584c-4e06-981c-405597456b02" />
+  <Project Path="FileConverterService.Infrastructure/FileConverterService.Infrastructure.csproj" Id="96b46fce-e917-482c-968d-240b74d54dc1" />
+</Solution>

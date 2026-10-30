@@ -1,0 +1,16 @@
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Application\bin\Debug\net10.0\FileConverterService.Application.deps.json
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Application\bin\Debug\net10.0\FileConverterService.Application.dll
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Application\bin\Debug\net10.0\FileConverterService.Application.pdb
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Application\bin\Debug\net10.0\FileConverterService.Domain.dll
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Application\bin\Debug\net10.0\FileConverterService.Domain.pdb
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Application\obj\Debug\net10.0\FileConverterService.Application.csproj.AssemblyReference.cache
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Application\obj\Debug\net10.0\FileConverterService.Application.GeneratedMSBuildEditorConfig.editorconfig
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Application\obj\Debug\net10.0\FileConverterService.Application.AssemblyInfoInputs.cache
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Application\obj\Debug\net10.0\FileConverterService.Application.AssemblyInfo.cs
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Application\obj\Debug\net10.0\FileConverterService.Application.csproj.CoreCompileInputs.cache
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Application\obj\Debug\net10.0\FileConverterService.Application.sourcelink.json
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Application\obj\Debug\net10.0\FileConv.7AEA2780.Up2Date
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Application\obj\Debug\net10.0\FileConverterService.Application.dll
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Application\obj\Debug\net10.0\refint\FileConverterService.Application.dll
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Application\obj\Debug\net10.0\FileConverterService.Application.pdb
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Application\obj\Debug\net10.0\ref\FileConverterService.Application.dll

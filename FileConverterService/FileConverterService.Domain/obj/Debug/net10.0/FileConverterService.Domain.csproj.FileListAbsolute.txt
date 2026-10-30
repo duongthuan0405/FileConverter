@@ -1,0 +1,12 @@
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Domain\bin\Debug\net10.0\FileConverterService.Domain.deps.json
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Domain\bin\Debug\net10.0\FileConverterService.Domain.dll
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Domain\bin\Debug\net10.0\FileConverterService.Domain.pdb
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Domain\obj\Debug\net10.0\FileConverterService.Domain.GeneratedMSBuildEditorConfig.editorconfig
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Domain\obj\Debug\net10.0\FileConverterService.Domain.AssemblyInfoInputs.cache
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Domain\obj\Debug\net10.0\FileConverterService.Domain.AssemblyInfo.cs
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Domain\obj\Debug\net10.0\FileConverterService.Domain.csproj.CoreCompileInputs.cache
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Domain\obj\Debug\net10.0\FileConverterService.Domain.sourcelink.json
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Domain\obj\Debug\net10.0\FileConverterService.Domain.dll
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Domain\obj\Debug\net10.0\refint\FileConverterService.Domain.dll
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Domain\obj\Debug\net10.0\FileConverterService.Domain.pdb
+D:\Projects\FileConverter\FileConverterService\FileConverterService.Domain\obj\Debug\net10.0\ref\FileConverterService.Domain.dll
