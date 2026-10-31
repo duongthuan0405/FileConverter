@@ -38,6 +38,7 @@ namespace FileConverterService.Api.Controllers
                     Content = f.OpenReadStream()
                 })
             };
+
             var res = await _sender.Send(inp);
             return StatusCode(StatusCodes.Status202Accepted, res);
         }

@@ -1,5 +1,6 @@
 using FileConverterService.Api.Middlewares;
 using FileConverterService.Api.Registrations;
+using DotNetEnv;
 
 namespace FileConverterService.Api
 {
@@ -7,6 +8,7 @@ namespace FileConverterService.Api
     {
         public static void Main(string[] args)
         {
+            Env.Load();
             var builder = WebApplication.CreateBuilder(args);
 
             // Add services to the container.
@@ -16,7 +18,11 @@ namespace FileConverterService.Api
             builder.Services.AddOpenApi();
 
             builder.Services.RegisterUseCasesHandlers();
-            builder.Services.AddTransient<GlobalExceptionHandlerMiddleware>();
+            builder.Services.RegisterMiddlewares();
+            builder.Services.RegisterHelperServices();
+            builder.Services.RegisterWorkers();
+            builder.Services.RegisterRepositories();
+            builder.Services.RegisterConfigurationOptions(builder.Environment, builder.Configuration);
 
             var app = builder.Build();
 
