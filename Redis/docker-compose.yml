@@ -1,0 +1,28 @@
+services:
+  redis: 
+    image: redis:7.4-alpine3.21
+    container_name: redis-server
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+
+  redisinsight:
+    image: redis/redisinsight:latest
+    container_name: redis-insight
+    restart: always
+    ports:
+      - "5540:5540"
+    volumes:
+      - redisinsight_data:/data
+    environment:
+      - RI_APP_REDIS_SERVERS=redis://redis:6379/0?name=Local-Redis
+    depends_on:
+      - redis
+        
+
+volumes:
+  redis_data:
+  redisinsight_data:

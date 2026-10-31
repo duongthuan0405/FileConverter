@@ -9,7 +9,7 @@ public static class RepositoryRegistration
 {
     public static IServiceCollection RegisterRepositories(this IServiceCollection services)
     {
-        services.AddSingleton<IJobConversionRepository, InMemoryJobConversionRepository>();
+        services.AddSingleton<IJobConversionRepository, RedisJobConversionRepository>();
         return services;
     }
 }

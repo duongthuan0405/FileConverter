@@ -5,6 +5,7 @@ using FileConverterService.Infrastructure.HelperServices.Storage;
 using FileConverterService.Infrastructure.Converters;
 using FileConverterService.Infrastructure.Queues;
 using Microsoft.Extensions.Options;
+using StackExchange.Redis;
 
 namespace FileConverterService.Api.Registrations;
 
@@ -13,7 +14,12 @@ public static class HelperServicesRegistration
     public static IServiceCollection RegisterHelperServices(this IServiceCollection services)
     {
         services.AddSingleton<IFileManagerService, LocalFileManagerService>();
-        services.AddSingleton<IConversionJobQueue, ChannelConversionQueue>();
+        services.AddSingleton<IConnectionMultiplexer>(serviceProvider =>
+        {
+            var options = serviceProvider.GetRequiredService<IOptions<RedisOptions>>().Value;
+            return ConnectionMultiplexer.Connect(options.ConnectionString);
+        });
+        services.AddSingleton<IConversionJobQueue, RedisConversionQueue>();
         services.AddHttpClient<IDocumentConverter, GotenbergDocumentConverter>()
         .ConfigureHttpClient((serviceProvider, client) =>
         {

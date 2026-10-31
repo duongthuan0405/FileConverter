@@ -1,6 +1,7 @@
 using FileConverterService.Infrastructure.HelperServices.Storage;
 using FileConverterService.Infrastructure.Converters;
 using Microsoft.Extensions.Options;
+using FileConverterService.Infrastructure.Queues;
 
 namespace FileConverterService.Api.Registrations;
 
@@ -11,6 +12,20 @@ public static class ConfigurationOptionsRegistration
         IHostEnvironment environment,
         IConfiguration configuration)
     {
+        services.AddOptions<RedisOptions>()
+            .Bind(configuration.GetSection("REDIS"))
+            .Validate(options => !string.IsNullOrWhiteSpace(options.ConnectionString),
+                "REDIS:ConnectionString is required.")
+            .Validate(options => !string.IsNullOrWhiteSpace(options.QueueKey),
+                "REDIS:QueueKey is required.")
+            .Validate(options => options.PollIntervalMilliseconds > 0,
+                "REDIS:PollIntervalMilliseconds must be greater than zero.")
+            .Validate(options => !string.IsNullOrWhiteSpace(options.BatchKey),
+                "REDIS:BatchKey is require.")
+            .Validate(options => !string.IsNullOrWhiteSpace(options.JobKey),
+                "REDIS:JobKey is require.")
+            .ValidateOnStart();
+
         services.AddOptions<StorageOptions>()
             .Configure(options => options.RootPath = Path.Combine(environment.ContentRootPath, "Storage"));
 

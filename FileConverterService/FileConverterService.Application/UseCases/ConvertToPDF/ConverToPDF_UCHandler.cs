@@ -25,8 +25,8 @@ public class ConverToPDF_UCHandler : IRequestHandler<ConverToPDF_UCInput, Conver
         {
             var safeFileName = Path.GetFileName(file.FileName);
             var extension = Path.GetExtension(safeFileName);
-            var jobId = Guid.NewGuid();
-            var storageKey = $"input/{jobId:N}{extension}";
+            var fileInputName = Guid.NewGuid();
+            var storageKey = $"input/{fileInputName:N}{extension}";
             var job = new ConversionJob(safeFileName, file.Type, storageKey);
             return new { Job = job, Content = file.Content };
         }).ToList();

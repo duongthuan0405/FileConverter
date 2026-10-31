@@ -2,8 +2,9 @@ using FileConverterService.Domain.Enums;
 
 namespace FileConverterService.Domain.Entities;
 
-public sealed class ConversionJob : Entity
+public sealed class ConversionJob
 {
+    private Guid _id = Guid.NewGuid();
     private string _originalFileName = "";
     private string _contentType = "";
     private string _inputStorageKey = "";
@@ -12,6 +13,11 @@ public sealed class ConversionJob : Entity
     private DateTimeOffset? _completedAt;
     private string? _outputStorageKey;
     private string? _error;
+
+    public ConversionJob()
+    {
+
+    }
 
     public ConversionJob(string originalFileName, string contentType, string inputStorageKey)
     {
@@ -24,6 +30,12 @@ public sealed class ConversionJob : Entity
         InputStorageKey = inputStorageKey;
         CreatedAt = DateTimeOffset.UtcNow;
         Status = ConversionJobStatus.Pending;
+    }
+
+    public Guid Id
+    {
+        get => _id;
+        private set => _id = value;
     }
 
     public string OriginalFileName 
