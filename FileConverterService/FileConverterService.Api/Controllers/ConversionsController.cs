@@ -2,6 +2,7 @@ using FileConverterService.Api.ApiResponseModels;
 using FileConverterService.Application.UseCases.ConvertToPDF;
 using FileConverterService.Application.UseCases.DeleteResourceRelatedToJob;
 using FileConverterService.Application.UseCases.GetJob;
+using FileConverterService.Application.UseCases.GetFileOfJob;
 using MediatR;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -66,11 +67,12 @@ namespace FileConverterService.Api.Controllers
         /// <param name="jobId">Mã định danh của Job (file cần tải)</param>
         /// <param name="cancellationToken">Token hủy tác vụ</param>
         [HttpGet("job/{jobId}/file")]
-        public Task<IActionResult> GetFileOfJob(
+        public async Task<IActionResult> GetFileOfJob(
             [FromRoute] string jobId,
             CancellationToken cancellationToken = default)
         {
-            throw new NotImplementedException();
+            var result = await _sender.Send(new GetFileOfJob_UCInput { JobId = jobId }, cancellationToken);
+            return File(result.Content, result.ContentType, result.FileName);
         }
 
         /// <summary>

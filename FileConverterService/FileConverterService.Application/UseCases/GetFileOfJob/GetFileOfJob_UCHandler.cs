@@ -2,6 +2,9 @@ using FileConverterService.Application.HelperServices.Storage;
 using FileConverterService.Application.Repositories;
 using MediatR;
 using Microsoft.Extensions.Logging;
+using FileConverterService.Application.BusinessExceptions;
+using FileConverterService.Application.Constants;
+using FileConverterService.Domain.Enums;
 
 namespace FileConverterService.Application.UseCases.GetFileOfJob;
 
@@ -20,7 +23,39 @@ public class GetFileOfJob_UCHandler : IRequestHandler<GetFileOfJob_UCInput, GetF
 
     public async Task<GetFileOfJob_UCOutput> Handle(GetFileOfJob_UCInput request, CancellationToken cancellationToken)
     {
-        throw new NotImplementedException();
+        var jobId = Guid.Parse(request.JobId);
+        var job = await _jobRepo.GetByIdAsync(jobId, cancellationToken)
+            ?? throw new NotFoundException(ApplicationErrorMessage.JobNotFound);
+
+        if (job.Status != ConversionJobStatus.Completed)
+            throw new ConflictUniqueValueException(ApplicationErrorMessage.JobNotCompleted);
+
+        if (string.IsNullOrWhiteSpace(job.OutputStorageKey))
+            throw new NotFoundException(ApplicationErrorMessage.JobFileNotFound);
+
+        // Resolve the download name before opening the stream; the HTTP response owns it.
+        var originalName = job.OriginalFileName.Replace('\\', '/');
+        var fileName = Path.ChangeExtension(Path.GetFileName(originalName), ".pdf");
+        Stream content;
+        try
+        {
+            content = await _fileManager.ReadFileAsync(job.OutputStorageKey, cancellationToken);
+        }
+        catch (FileNotFoundException)
+        {
+            throw new NotFoundException(ApplicationErrorMessage.JobFileNotFound);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            throw new NotFoundException(ApplicationErrorMessage.JobFileNotFound);
+        }
+
+        return new GetFileOfJob_UCOutput
+        {
+            Content = content,
+            FileName = fileName,
+            ContentType = "application/pdf"
+        };
     }
 }
 
