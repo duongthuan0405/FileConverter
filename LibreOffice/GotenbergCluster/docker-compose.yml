@@ -1,0 +1,27 @@
+name: fileconverter-gotenberg-cluster
+
+services:
+  nginx:
+    image: nginx:1.28-alpine
+    ports:
+      - "80:3000"
+    volumes:
+      - type: bind
+        source: ./nginx.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+
+    depends_on:
+      - gotenberg
+
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    command:
+      - gotenberg
+      - --api-timeout=120s
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: 1
+          memory: 512m
