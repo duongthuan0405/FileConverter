@@ -33,6 +33,7 @@ public class GetJob_UCHandler : IRequestHandler<GetJob_UCInput, GetJob_UCOutput>
             Status = job.Status.ToString(),
             CreatedAt = job.CreatedAt,
             CompletedAt = job.CompletedAt,
+            ProcessedAt = job.ProccessedAt,
             Error = job.Error
         };
     }

@@ -9,6 +9,7 @@ namespace FileConverterService.Application.UseCases.GetJob
         public string Status { get; set; } = string.Empty;
         public DateTimeOffset CreatedAt { get; set; }
         public DateTimeOffset? CompletedAt { get; set; }
+        public DateTimeOffset? ProcessedAt { get; set; }
         public string? Error { get; set; }
     }
 }
