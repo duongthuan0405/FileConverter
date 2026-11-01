@@ -24,7 +24,7 @@ public sealed class GotenbergDocumentConverter : IDocumentConverter
         Guid jobId,
         Stream input,
         string fileName,
-        Func<Stream, Task>? outputWriter,
+        Func<Stream, Task>? callBack,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(input);
@@ -35,9 +35,9 @@ public sealed class GotenbergDocumentConverter : IDocumentConverter
         response.EnsureSuccessStatusCode();
 
         await using var pdfStream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        if (outputWriter is not null)
+        if (callBack is not null)
         {
-            await outputWriter(pdfStream);
+            await callBack(pdfStream);
         }
 
         _logger.LogInformation("PDF conversion completed for job {JobId}.", jobId);

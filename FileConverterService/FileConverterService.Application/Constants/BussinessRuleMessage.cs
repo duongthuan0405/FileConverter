@@ -6,6 +6,11 @@ namespace FileConverterService.Application.Constants
 {
     internal static class BussinessRuleMessage
     {
+        internal static class JobValidator
+        {
+            public const string InvalidJobId = "JobId must be a valid, non-empty GUID.";
+        }
+
         internal static class FileValidator
         {
             public static string InvalidType = "Only .doc and .docx files are supported.";

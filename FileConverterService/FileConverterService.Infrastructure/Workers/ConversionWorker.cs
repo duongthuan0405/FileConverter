@@ -25,7 +25,6 @@ public sealed class ConversionWorker : BackgroundService
     {
         await foreach (var jobId in ReadJobs(stoppingToken))
         {
-            await Task.Delay(10000);
             try
             {
                 var job = await _repository.GetByIdAsync(jobId, stoppingToken);
@@ -50,11 +49,17 @@ public sealed class ConversionWorker : BackgroundService
                 {
                     await using var input = await _fileManager.ReadFileAsync(job.InputStorageKey, stoppingToken);
                     var outputKey = $"output/{job.Id:N}.pdf";
+
+                    Func<Stream, Task> callback = async (stream) =>
+                    {
+                        await _fileManager.SaveFileAsync(stream, outputKey, stoppingToken);
+                    }; 
+
                     await _converter.ConvertToPdfAsync(
                         job.Id,
                         input,
                         job.OriginalFileName,
-                        pdfStream => _fileManager.SaveFileAsync(pdfStream, outputKey, stoppingToken),
+                        callback,
                         stoppingToken);
                     job.Complete(outputKey);
                 }

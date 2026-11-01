@@ -1,8 +1,11 @@
 using FileConverterService.Api.ApiResponseModels;
 using FileConverterService.Application.UseCases.ConvertToPDF;
+using FileConverterService.Application.UseCases.DeleteResourceRelatedToJob;
+using FileConverterService.Application.UseCases.GetJob;
 using MediatR;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Superpower.Model;
 
 namespace FileConverterService.Api.Controllers
 {
@@ -25,7 +28,7 @@ namespace FileConverterService.Api.Controllers
         /// <returns>Trả về 202 Accepted cùng danh sách các jobId tương ứng với từng file</returns>
         [HttpPost]
         [Consumes("multipart/form-data")]
-        public async Task<ActionResult<ApiSuccessResponse<object>>> ConvertToPDF(
+        public async Task<ActionResult<ApiSuccessResponse<ConverToPDF_UCOutput>>> ConvertToPDF(
             [FromForm] List<IFormFile> files,
             CancellationToken cancellationToken = default)
         {
@@ -40,7 +43,7 @@ namespace FileConverterService.Api.Controllers
             };
 
             var res = await _sender.Send(inp);
-            return StatusCode(StatusCodes.Status202Accepted, res);
+            return StatusCode(StatusCodes.Status202Accepted, new ApiSuccessResponse<ConverToPDF_UCOutput>(res));
         }
 
         /// <summary>
@@ -49,11 +52,12 @@ namespace FileConverterService.Api.Controllers
         /// <param name="jobId">Mã định danh của Job (đại diện cho 1 file)</param>
         /// <param name="cancellationToken">Token hủy tác vụ</param>
         [HttpGet("job/{jobId}")]
-        public Task<ActionResult<ApiSuccessResponse<object>>> GetJob(
+        public async Task<ActionResult<ApiSuccessResponse<GetJob_UCOutput>>> GetJob(
             [FromRoute] string jobId,
             CancellationToken cancellationToken = default)
         {
-            throw new NotImplementedException();
+            var result = await _sender.Send(new GetJob_UCInput { JobId = jobId }, cancellationToken);
+            return Ok(new ApiSuccessResponse<GetJob_UCOutput>(result));
         }
 
         /// <summary>
@@ -75,11 +79,12 @@ namespace FileConverterService.Api.Controllers
         /// <param name="jobId">Mã định danh của Job cần dọn dẹp</param>
         /// <param name="cancellationToken">Token hủy tác vụ</param>
         [HttpDelete("job/{jobId}")]
-        public Task<ActionResult<ApiSuccessResponse<string>>> DeleteResourceRelatedToJob(
+        public async Task<ActionResult<ApiSuccessResponse<DeleteResourceRelatedToJob_UCOutput>>> DeleteResourceRelatedToJob(
             [FromRoute] string jobId,
             CancellationToken cancellationToken = default)
         {
-            throw new NotImplementedException();
+            var result = await _sender.Send(new DeleteResourceRelatedToJob_UCInput { JobId = jobId }, cancellationToken);
+            return Ok(new ApiSuccessResponse<DeleteResourceRelatedToJob_UCOutput>(result));
         }
     }
 }

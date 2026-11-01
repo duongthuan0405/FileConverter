@@ -10,6 +10,7 @@ public sealed class ConversionJob
     private string _inputStorageKey = "";
     private ConversionJobStatus _status;
     private DateTimeOffset _createdAt;
+    private DateTimeOffset? _proccessedAt;
     private DateTimeOffset? _completedAt;
     private string? _outputStorageKey;
     private string? _error;
@@ -77,19 +78,25 @@ public sealed class ConversionJob
         get => _outputStorageKey; 
         private set => _outputStorageKey = value; 
     }
+    public DateTimeOffset? ProccessedAt 
+    { 
+        get => _proccessedAt; 
+        set => _proccessedAt = value; 
+    }
 
     public void Start() 
     { 
         EnsureStatus(ConversionJobStatus.Pending); 
         Status = ConversionJobStatus.Processing; 
+        ProccessedAt = DateTimeOffset.UtcNow;
         Error = null; 
     }
-    public void Complete(string outputStorageKey, DateTimeOffset? completedAt = null) 
+    public void Complete(string outputStorageKey) 
     { 
         ArgumentException.ThrowIfNullOrWhiteSpace(outputStorageKey);
         EnsureStatus(ConversionJobStatus.Processing); 
         Status = ConversionJobStatus.Completed; 
-        CompletedAt = completedAt ?? DateTimeOffset.UtcNow;
+        CompletedAt = DateTimeOffset.UtcNow;
         OutputStorageKey = outputStorageKey;
         Error = null;
     }
@@ -99,6 +106,7 @@ public sealed class ConversionJob
         EnsureStatus(ConversionJobStatus.Processing); 
         Status = ConversionJobStatus.Failed;
         Error = error;
+        CompletedAt = DateTimeOffset.UtcNow;
     }
 
     private void EnsureStatus(ConversionJobStatus expectedStatus)
