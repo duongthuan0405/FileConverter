@@ -1,4 +1,4 @@
-name: fileconverter-gotenberg-cluster
+﻿name: fileconverter-gotenberg-cluster
 
 services:
   nginx:
@@ -17,11 +17,12 @@ services:
   gotenberg:
     image: gotenberg/gotenberg:8
     command:
-      - gotenberg
-      - --api-timeout=120s
+      - "gotenberg"
+      - "--api-timeout=120s"
+      - "--libreoffice-restart-after=1"
     deploy:
       replicas: 2
       resources:
         limits:
-          cpus: 1
+          cpus: 0.5
           memory: 512m

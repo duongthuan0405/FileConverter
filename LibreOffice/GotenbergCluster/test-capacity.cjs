@@ -43,8 +43,8 @@ function openUpload(number) {
 
     request.write(
       '--capacityprobe\r\n' +
-        'Content-Disposition: form-data; name="files"; filename="probe.txt"\r\n' +
-        'Content-Type: text/plain\r\n\r\n' +
+        'Content-Disposition: form-data; name="files"; filename="D:\\UIT\\25_26_HK1\\SE100_OOAD\\DoAn\\23520303_DoMinhDuc_23521036_BuiBachNguyen_23521148_NguyenTruongTienPhat_23521473_NguyenDuyTuongThi_23521548_DuongQuocThuan.docx"\r\n' +
+        'Content-Type: \r\n\r\n' +
         'probe',
       (error) => {
         if (error) return reject(error);

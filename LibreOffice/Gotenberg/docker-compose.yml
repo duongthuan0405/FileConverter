@@ -1,13 +1,30 @@
+
 services:
   gotenberg:
     image: gotenberg/gotenberg:8
+    container_name: gotenberg-test
+    restart: unless-stopped
+
     ports:
-      - 3000:3000
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       memory: 100m
-    #       cpus: 0.1
-    #     limits:
-    #       memory: 512m
-    #       cpus: 0.5
+      - "3000:3000"
+
+    command:
+      - "gotenberg"
+      - "--api-timeout=120s"
+      - "--libreoffice-restart-after=1"
+
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+
+    deploy:
+      resources:
+        limits:
+          memory: 512MiB
+          cpus: 0.5
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

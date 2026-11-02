@@ -19,4 +19,8 @@
     <ProjectReference Include="..\FileConverterService.Infrastructure\FileConverterService.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="Storage\" />
+  </ItemGroup>
+
 </Project>
