@@ -1,104 +1,90 @@
-const http = require('node:http');
+const { resolve } = require("node:dns");
+const fs = require("node:fs");
+const path = require("node:path");
+const { default: test } = require("node:test");
 
-const uploads = [];
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-let cleaningUp = false;
+const URL = "http://localhost/forms/libreoffice/convert";
 
-function closeUploads() {
-  cleaningUp = true;
-  for (const request of uploads) request.destroy();
-}
+async function callApi(index, inputPath, cancel_after_ms = null)
+{
+  const CANCEL_AFTER_MS = cancel_after_ms;
+  const FILE_PATH = inputPath
+  const start = new Date();
+  // 1. Tạo AbortController
+  const controller = new AbortController();
 
-function openUpload(number) {
-  return new Promise((resolve, reject) => {
-    const request = http.request({
-      hostname: '127.0.0.1',
-      port: 80,
-      path: '/forms/libreoffice/convert',
-      method: 'POST',
-      agent: false,
-      headers: {
-        'Content-Type': 'multipart/form-data; boundary=capacityprobe',
-        'Content-Length': 1048576,
-        Connection: 'close',
-      },
+  // 2. Buffer đọc file
+  const buffer = fs.readFileSync(FILE_PATH);
+  
+  const form = new FormData();
+  form.append(
+    "files",
+    new Blob([buffer], {
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    }),
+    path.basename(FILE_PATH)
+  );
+
+  // Đặt thời gian để abort
+    const timer = CANCEL_AFTER_MS != null ? 
+    setTimeout(() => {
+      console.log(`After ${CANCEL_AFTER_MS} ms, request ${index} is being cancelling ...`);
+      controller.abort();
+    }, CANCEL_AFTER_MS)
+    : null;
+
+
+  try {
+    // Gửi request
+    console.log(`Sending request ${index}...`);
+    const response = await fetch(URL, {
+      method: "POST",
+      body: form,
+      signal: controller.signal
     });
 
-    uploads.push(request);
-    request.on('error', (error) => {
-      if (!cleaningUp) {
-        console.error(`Upload ${number}: ${error.message}`);
-        process.exitCode = 1;
-      }
-      reject(error);
-    });
-    request.on('response', (response) => {
-      console.error(`Upload ${number} ket thuc som: HTTP ${response.statusCode}`);
-      process.exitCode = 1;
-      response.resume();
-    });
-    request.setTimeout(10000, () => {
-      request.destroy(new Error(`Upload ${number} timeout`));
-    });
+    // Đọc response
+    console.log(`HTTP status request ${index}:`, response.status);
 
-    request.write(
-      '--capacityprobe\r\n' +
-        'Content-Disposition: form-data; name="files"; filename="D:\\UIT\\25_26_HK1\\SE100_OOAD\\DoAn\\23520303_DoMinhDuc_23521036_BuiBachNguyen_23521148_NguyenTruongTienPhat_23521473_NguyenDuyTuongThi_23521548_DuongQuocThuan.docx"\r\n' +
-        'Content-Type: \r\n\r\n' +
-        'probe',
-      (error) => {
-        if (error) return reject(error);
-        console.log(`Da mo upload ${number}, chua gui het body.`);
-        resolve();
-      },
-    );
-    // Deliberately do not call end(): hold the upload connection open.
-  });
-}
+    if (!response.ok) {
+        console.log(await response.text());
+        return;
+    }
 
-function probeCapacity() {
-  return new Promise((resolve, reject) => {
-    const request = http.get(
-      'http://127.0.0.1/health',
-      { agent: false },
-      (response) => {
-        console.log(`Request thu ba: HTTP ${response.statusCode}`);
-        if (response.statusCode !== 502) {
-          console.error('Khong nhan 502 nhu mong doi; kiem tra replica va log nginx.');
-          process.exitCode = 1;
-        }
-        response.resume();
-        response.on('end', resolve);
-        response.on('error', reject);
-        response.on('aborted', () => reject(new Error('Response bi ngat')));
-      },
-    );
-    request.setTimeout(5000, () => {
-      request.destroy(new Error('Request thu ba timeout'));
-    });
-    request.on('error', reject);
-  });
+    const pdf = Buffer.from(await response.arrayBuffer());
+    fs.writeFileSync(`test-doc/oup/output_${index}.pdf`, pdf);
+    console.log(`Conversion ${index} completed`);
+  } 
+  catch (error) {
+    if (error.name === "AbortError") {
+        console.log(`Request ${index} CANCELLED`);
+    } else {
+        console.error(`Request ${index} FAILED:`, error);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+  const end = new Date();
+
+  console.log(`Request ${index}: Start at: ${start}; End at: ${end}; Total: ${(end - start)/1000}ms`);
 }
 
 async function main() {
-  try {
-    await Promise.all([openUpload(1), openUpload(2)]);
-    await sleep(2000);
-    if (process.exitCode) throw new Error('Khong giu duoc hai upload.');
-    await probeCapacity();
-    console.log('Doi chieu log nginx: hai upload phai den hai IP backend khac nhau.');
-  } finally {
-    closeUploads();
-    console.log('Da dong hai ket noi upload.');
-  }
+
+  outputDir = "test-doc/oup";
+  long = "test-doc/inp/long.docx";
+  short = "test-doc/inp/short.docx";
+  fs.rmSync(outputDir, { recursive: true, force: true });
+
+  // Tạo lại thư mục
+  fs.mkdirSync(outputDir, { recursive: true });
+  const start = new Date();
+  
+  const promises = [callApi(1, short), callApi(2, short), callApi(3, short)];
+
+  await Promise.all(promises);
+  const end = new Date();
+  console.log("TOTAL:", (end - start) / 1000, "s");
 }
 
-process.once('SIGINT', () => {
-  closeUploads();
-  process.exit(130);
-});
-
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+main().catch(e => console.error(e));

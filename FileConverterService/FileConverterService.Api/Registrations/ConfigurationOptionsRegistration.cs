@@ -18,6 +18,10 @@ public static class ConfigurationOptionsRegistration
                 "REDIS:ConnectionString is required.")
             .Validate(options => !string.IsNullOrWhiteSpace(options.QueueKey),
                 "REDIS:QueueKey is required.")
+            .Validate(options => !string.IsNullOrWhiteSpace(options.ReceiptKey),
+                "REDIS:ReceiptKey is required.")
+            .Validate(options => options.ReceiptKey != options.QueueKey,
+                "REDIS:ReceiptKey must be different from REDIS:QueueKey.")
             .Validate(options => options.PollIntervalMilliseconds > 0,
                 "REDIS:PollIntervalMilliseconds must be greater than zero.")
             .Validate(options => !string.IsNullOrWhiteSpace(options.BatchKey),
@@ -36,6 +40,8 @@ public static class ConfigurationOptionsRegistration
                 "GOTENBERG:BaseUrl must be a valid absolute URL.")
             .Validate(options => options.TimeoutInMinutes > 0,
                 "GOTENBERG:TimeoutInMinutes must be greater than zero.")
+            .Validate(options => options.DeadlineInMinutes > 0 && options.DeadlineInMinutes <= 71582,
+                "GOTENBERG:DeadlineInMinutes must be between 1 and 71582.")
             .Validate(options => options.MaxAttempts >= 1,
                 "GOTENBERG:MaxAttempts must be at least one.")
             .Validate(options => options.RetryDelayInMinutes >= 0,

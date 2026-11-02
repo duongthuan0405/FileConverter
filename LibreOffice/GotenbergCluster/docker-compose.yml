@@ -18,11 +18,11 @@ services:
     image: gotenberg/gotenberg:8
     command:
       - "gotenberg"
-      - "--api-timeout=120s"
+      - "--api-timeout=180s"
       - "--libreoffice-restart-after=1"
     deploy:
       replicas: 2
       resources:
         limits:
-          cpus: 0.5
+          cpus: 0.25
           memory: 512m

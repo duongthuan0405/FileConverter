@@ -12,6 +12,11 @@ namespace FileConverterService.Application.HelperServices.Storage
         Task<string> SaveFileAsync(Stream fileStream, string? key = null, CancellationToken cancellationToken = default);
 
         /// <summary>
+        /// Ghi vào file tạm, chỉ công bố đường dẫn kết quả khi đã ghi đầy đủ.
+        /// </summary>
+        Task<string> SaveFileAtomicallyAsync(Stream fileStream, string key, CancellationToken cancellationToken = default);
+
+        /// <summary>
         /// Đọc tệp tin từ vùng lưu trữ.
         /// </summary>
         /// <param name="key">Định danh file, có thể là path hoặc key</param>

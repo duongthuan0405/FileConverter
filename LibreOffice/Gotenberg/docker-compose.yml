@@ -10,7 +10,7 @@ services:
 
     command:
       - "gotenberg"
-      - "--api-timeout=120s"
+      - "--api-timeout=10s"
       - "--libreoffice-restart-after=1"
 
     environment:
@@ -20,7 +20,7 @@ services:
       resources:
         limits:
           memory: 512MiB
-          cpus: 0.5
+          cpus: 0.25
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]

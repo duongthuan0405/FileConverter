@@ -6,31 +6,32 @@ using FileConverterService.Domain.Enums;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace FileConverterService.Infrastructure.Workers;
+namespace FileConverterService.Infrastructure.Processors;
 
-public sealed class ConversionWorker : BackgroundService
+public sealed class ConversionJobProccessor : BackgroundService
 {
     private readonly IConversionJobQueue _queue;
     private readonly IJobConversionRepository _repository;
     private readonly IFileManagerService _fileManager;
     private readonly IDocumentConverter _converter;
-    private readonly ILogger<ConversionWorker> _logger;
+    private readonly ILogger<ConversionJobProccessor> _logger;
 
-    public ConversionWorker(IConversionJobQueue queue, IJobConversionRepository repository, IFileManagerService fileManager, IDocumentConverter converter, ILogger<ConversionWorker> logger)
+    public ConversionJobProccessor(IConversionJobQueue queue, IJobConversionRepository repository, IFileManagerService fileManager, IDocumentConverter converter, ILogger<ConversionJobProccessor> logger)
     {
         _queue = queue; _repository = repository; _fileManager = fileManager; _converter = converter; _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await foreach (var jobId in ReadJobs(stoppingToken))
+        await foreach (var claim in ReadJobs(stoppingToken))
         {
+            var jobId = claim.JobId;
             try
             {
                 var job = await _repository.GetByIdAsync(jobId, stoppingToken);
                 if (job is null)
                 {
-                    _logger.LogWarning("Job {JobId} was not found in the repository.", jobId);
+                    _logger.LogWarning("Job {JobId} was not found. Receipt {ReceiptId} retained in processing.", jobId, claim.ReceiptId);
                     continue;
                 }
 
@@ -39,6 +40,9 @@ public sealed class ConversionWorker : BackgroundService
 
                 if (job.Status != ConversionJobStatus.Pending)
                 {
+                    // A terminal state can be left behind if the previous ACK failed.
+                    if (job.Status is ConversionJobStatus.Completed or ConversionJobStatus.Failed)
+                        await _queue.AcknowledgeAsync(claim, stoppingToken);
                     _logger.LogWarning("Skipping job {JobId} in status {Status}.", jobId, job.Status);
                     continue;
                 }
@@ -50,9 +54,9 @@ public sealed class ConversionWorker : BackgroundService
                     await using var input = await _fileManager.ReadFileAsync(job.InputStorageKey, stoppingToken);
                     var outputKey = $"output/{job.Id:N}.pdf";
 
-                    Func<Stream, Task> callback = async (stream) =>
+                    Func<Stream, CancellationToken, Task> callback = async (stream, cancellationToken) =>
                     {
-                        await _fileManager.SaveFileAsync(stream, outputKey, stoppingToken);
+                        await _fileManager.SaveFileAtomicallyAsync(stream, outputKey, cancellationToken);
                     }; 
 
                     await _converter.ConvertToPdfAsync(
@@ -70,6 +74,8 @@ public sealed class ConversionWorker : BackgroundService
                 }
 
                 await _repository.UpdateAsync(job, stoppingToken);
+                // Only ACK after Complete/Fail has been persisted, not inside the save callback.
+                await _queue.AcknowledgeAsync(claim, stoppingToken);
                 if (job.Status == ConversionJobStatus.Completed)
                 {
                     _logger.LogInformation(
@@ -79,13 +85,13 @@ public sealed class ConversionWorker : BackgroundService
             }
             catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
             {
-                _logger.LogError(exception, "Could not process or persist job {JobId}", jobId);
+                _logger.LogError(exception, "Could not process or persist job {JobId}. Receipt {ReceiptId} retained in processing.", jobId, claim.ReceiptId);
             }
 
         }
     }
 
-    private async IAsyncEnumerable<Guid> ReadJobs([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    private async IAsyncEnumerable<ConversionJobClaim> ReadJobs([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
             yield return await _queue.DequeueAsync(cancellationToken);

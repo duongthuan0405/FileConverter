@@ -1,4 +1,4 @@
-using FileConverterService.Infrastructure.Workers;
+using FileConverterService.Infrastructure.Processors;
 
 namespace FileConverterService.Api.Registrations;
 
@@ -6,7 +6,7 @@ public static class WorkersRegistration
 {
     public static IServiceCollection RegisterWorkers(this IServiceCollection services)
     {
-        services.AddHostedService<ConversionWorker>();
+        services.AddHostedService<ConversionJobProccessor>();
         return services;
     }
 }

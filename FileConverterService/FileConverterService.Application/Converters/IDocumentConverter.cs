@@ -6,6 +6,6 @@ public interface IDocumentConverter
         Guid jobId,
         Stream input,
         string fileName,
-        Func<Stream, Task>? callBack,
+        Func<Stream, CancellationToken, Task>? callBack,
         CancellationToken cancellationToken = default);
 }

@@ -86,6 +86,33 @@ namespace FileConverterService.Infrastructure.HelperServices.Storage
             return key;
         }
 
+        public async Task<string> SaveFileAtomicallyAsync(
+            Stream fileStream,
+            string key,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(fileStream);
+            cancellationToken.ThrowIfCancellationRequested();
+            var filePath = ResolvePath(key);
+            // Same directory ensures publication is a rename on the same filesystem.
+            var temporaryKey = $"{key}.{Guid.NewGuid():N}.tmp";
+            var temporaryPath = ResolvePath(temporaryKey);
+
+            try
+            {
+                // SaveFileAsync closes its file handle before returning (important on Windows).
+                await SaveFileAsync(fileStream, temporaryKey, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                File.Move(temporaryPath, filePath, overwrite: true);
+                return key;
+            }
+            finally
+            {
+                // Also runs on read/write failures and cooperative cancellation.
+                File.Delete(temporaryPath);
+            }
+        }
+
         private string ResolvePath(string key)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(key);

@@ -24,23 +24,40 @@ public sealed class GotenbergDocumentConverter : IDocumentConverter
         Guid jobId,
         Stream input,
         string fileName,
-        Func<Stream, Task>? callBack,
+        Func<Stream, CancellationToken, Task>? callBack,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
-        _logger.LogInformation("Starting PDF conversion for job {JobId}.", jobId);
-        using var response = await SendWithRetryAsync(jobId, input, fileName, cancellationToken);
+        using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadlineCts.CancelAfter(TimeSpan.FromMinutes(_options.DeadlineInMinutes));
+        var deadlineToken = deadlineCts.Token;
 
-        response.EnsureSuccessStatusCode();
-
-        await using var pdfStream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        if (callBack is not null)
+        try
         {
-            await callBack(pdfStream);
-        }
+            deadlineToken.ThrowIfCancellationRequested();
+            _logger.LogInformation("Starting PDF conversion for job {JobId}.", jobId);
+            using var response = await SendWithRetryAsync(jobId, input, fileName, deadlineToken);
 
-        _logger.LogInformation("PDF conversion completed for job {JobId}.", jobId);
+            response.EnsureSuccessStatusCode();
+
+            await using var pdfStream = await response.Content.ReadAsStreamAsync(deadlineToken);
+            if (callBack is not null)
+            {
+                await callBack(pdfStream, deadlineToken);
+            }
+
+            deadlineToken.ThrowIfCancellationRequested();
+            _logger.LogInformation("PDF conversion completed for job {JobId}.", jobId);
+        }
+        catch (OperationCanceledException exception) when (
+            deadlineCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("PDF conversion for job {JobId} exceeded the total deadline of {DeadlineMinutes} minutes.",
+                jobId, _options.DeadlineInMinutes);
+            throw new TimeoutException(
+                $"PDF conversion exceeded the total deadline of {_options.DeadlineInMinutes} minutes.", exception);
+        }
     }
 
     private async Task<HttpResponseMessage> SendWithRetryAsync(
@@ -49,17 +66,15 @@ public sealed class GotenbergDocumentConverter : IDocumentConverter
         string fileName,
         CancellationToken cancellationToken)
     {
+        var delay = TimeSpan.FromMinutes(_options.RetryDelayInMinutes);
+        int maxAttempts = input.CanSeek ? _options.MaxAttempts : 1;
+        long initialPosition = input.CanSeek ? input.Position : 0;
 
-
-        TimeSpan delayTimeSpan = new TimeSpan(0, _options.RetryDelayInMinutes, 0);
-        int maxAttempts = _options.MaxAttempts;
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (input.CanSeek)
-            {
-                input.Position = 0;
-            }
-
+                input.Position = initialPosition;
 
             try
             {
@@ -68,53 +83,69 @@ public sealed class GotenbergDocumentConverter : IDocumentConverter
                     jobId, attempt, maxAttempts);
 
                 using var content = new MultipartFormDataContent();
-                content.Add(new StreamContent(input), "files", fileName);
-
-                using var request = new HttpRequestMessage(
-                    HttpMethod.Post,
-                    "/forms/libreoffice/convert")
+                content.Add(new StreamContent(new LeaveOpenReadStream(input)), "files", fileName);
+                using var request = new HttpRequestMessage(HttpMethod.Post, "/forms/libreoffice/convert")
                 {
                     Content = content
                 };
 
                 var response = await _httpClient.SendAsync(
-                    request,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    cancellationToken);
+                    request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
-                if ((int)response.StatusCode >= 500 && attempt < _options.MaxAttempts)
+                if ((int)response.StatusCode >= 500 && attempt < maxAttempts)
                 {
                     _logger.LogWarning(
                         "Gotenberg returned HTTP {StatusCode} for job {JobId}. Retrying in {RetryDelay}.",
-                        (int)response.StatusCode, jobId, delayTimeSpan);
+                        (int)response.StatusCode, jobId, delay);
                     response.Dispose();
-                    await Task.Delay(delayTimeSpan, cancellationToken);
+                    await Task.Delay(delay, cancellationToken);
                     continue;
                 }
 
                 return response;
             }
-            catch (HttpRequestException) when (attempt < _options.MaxAttempts)
+            catch (HttpRequestException) when (attempt < maxAttempts)
             {
                 _logger.LogWarning(
-                    "Gotenberg request failed for job {JobId}. Retrying in {RetryDelay}.",
-                    jobId, delayTimeSpan);
-                await Task.Delay(delayTimeSpan, cancellationToken);
+                    "Gotenberg request failed for job {JobId}. Retrying in {RetryDelay}.", jobId, delay);
+                await Task.Delay(delay, cancellationToken);
             }
-            catch (TaskCanceledException) when (
-                !cancellationToken.IsCancellationRequested && attempt < _options.MaxAttempts)
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested && attempt < maxAttempts)
             {
                 _logger.LogWarning(
-                    "Gotenberg request timed out for job {JobId}. Retrying in {RetryDelay}.",
-                    jobId, delayTimeSpan);
-                await Task.Delay(delayTimeSpan, cancellationToken);
+                    "Gotenberg request timed out for job {JobId}. Retrying in {RetryDelay}.", jobId, delay);
+                await Task.Delay(delay, cancellationToken);
             }
         }
 
-        _logger.LogError(
-            "Gotenberg conversion failed for job {JobId} after {MaxAttempts} attempts.",
-            jobId, maxAttempts);
-
         throw new InvalidOperationException("Gotenberg request failed after all retry attempts.");
+    }
+
+    private sealed class LeaveOpenReadStream : Stream
+    {
+        private readonly Stream _inner;
+
+        public LeaveOpenReadStream(Stream inner)
+        {
+            ArgumentNullException.ThrowIfNull(inner);
+            _inner = inner;
+        }
+
+        public override bool CanRead => _inner.CanRead;
+        public override bool CanSeek => _inner.CanSeek;
+        public override bool CanWrite => false;
+        public override long Length => _inner.Length;
+        public override long Position { get => _inner.Position; set => _inner.Position = value; }
+        public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+        public override int Read(Span<byte> buffer) => _inner.Read(buffer);
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            _inner.ReadAsync(buffer, offset, count, cancellationToken);
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            _inner.ReadAsync(buffer, cancellationToken);
+        public override long Seek(long offset, SeekOrigin origin) => _inner.Seek(offset, origin);
+        public override void Flush() => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        // Stream.Dispose only disposes this wrapper; it does not know about inner.
     }
 }
