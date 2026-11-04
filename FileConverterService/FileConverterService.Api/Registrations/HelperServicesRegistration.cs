@@ -1,5 +1,6 @@
 using FileConverterService.Application.HelperServices.Storage;
-using FileConverterService.Application.Queues;
+using FileConverterService.Application.Jobs;
+using FileConverterService.Infrastructure.AtomicOperations;
 using FileConverterService.Application.Converters;
 using FileConverterService.Infrastructure.HelperServices.Storage;
 using FileConverterService.Infrastructure.Converters;
@@ -19,7 +20,7 @@ public static class HelperServicesRegistration
             var options = serviceProvider.GetRequiredService<IOptions<RedisOptions>>().Value;
             return ConnectionMultiplexer.Connect(options.ConnectionString);
         });
-        services.AddSingleton<IConversionJobQueue, RedisConversionQueue>();
+        services.AddSingleton<IConversionJobAtomicOperations, RedisConversionJobAtomicOperations>();
         services.AddHttpClient<IDocumentConverter, GotenbergDocumentConverter>()
         .ConfigureHttpClient((serviceProvider, client) =>
         {

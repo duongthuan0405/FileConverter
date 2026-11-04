@@ -33,18 +33,34 @@ namespace FileConverterService.Api.Controllers
             [FromForm] List<IFormFile> files,
             CancellationToken cancellationToken = default)
         {
-            ConverToPDF_UCInput inp = new()
+            cancellationToken.ThrowIfCancellationRequested();
+            var openFiles = new List<FileParams>();
+            try
             {
-                Files = files.Select(f => new FileParams()
+                foreach (var file in files)
                 {
-                    FileName = f.FileName,
-                    Type = f.ContentType,
-                    Content = f.OpenReadStream()
-                })
-            };
+                    cancellationToken.ThrowIfCancellationRequested();
+                    openFiles.Add(new FileParams
+                    {
+                        FileName = file.FileName,
+                        Type = file.ContentType,
+                        Content = file.OpenReadStream()
+                    });
+                }
 
-            var res = await _sender.Send(inp);
-            return StatusCode(StatusCodes.Status202Accepted, new ApiSuccessResponse<ConverToPDF_UCOutput>(res));
+                ConverToPDF_UCInput inp = new()
+                {
+                    Files = openFiles
+                };
+
+                var res = await _sender.Send(inp, cancellationToken);
+                return StatusCode(StatusCodes.Status202Accepted, new ApiSuccessResponse<ConverToPDF_UCOutput>(res));
+            }
+            finally
+            {
+                foreach (var file in openFiles)
+                    await file.Content.DisposeAsync();
+            }
         }
 
         /// <summary>

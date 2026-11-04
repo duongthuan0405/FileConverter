@@ -11,7 +11,14 @@ namespace FileConverterService.Infrastructure.Extensions
     {
         public static async Task HashSetObjectAsync<T>(this IDatabase db, RedisKey key, T obj, CancellationToken cancellationToken) where T : class
         {
-            var hashEntries = typeof(T)
+            var hashEntries = ToHashEntries(obj);
+            await db.HashSetAsync(key, hashEntries).WaitAsync(cancellationToken);
+        }
+
+        internal static HashEntry[] ToHashEntries<T>(T obj) where T : class
+        {
+            ArgumentNullException.ThrowIfNull(obj);
+            return typeof(T)
                 .GetProperties(BindingFlags.Public | BindingFlags.Instance)
                 .Where(p => p.CanRead && p.GetIndexParameters().Length == 0)
                 .Select(p =>
@@ -25,12 +32,6 @@ namespace FileConverterService.Infrastructure.Extensions
                 })
                 .ToArray();
 
-            if(hashEntries == null)
-            {
-                throw new ArgumentNullException("Object need stored to Redis must be not null");
-            }
-
-            await db.HashSetAsync(key, hashEntries).WaitAsync(cancellationToken).WaitAsync(cancellationToken);
         }    
     }
 }

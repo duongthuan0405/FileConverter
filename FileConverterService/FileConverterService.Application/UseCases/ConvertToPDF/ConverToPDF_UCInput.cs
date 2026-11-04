@@ -5,7 +5,7 @@ namespace FileConverterService.Application.UseCases.ConvertToPDF
     public class ConverToPDF_UCInput : IRequest<ConverToPDF_UCOutput>
     {
         
-        public IEnumerable<FileParams> Files { get; set; } = new List<FileParams>();
+        public List<FileParams> Files { get; set; } = new List<FileParams>();
     }
 
     public class FileParams

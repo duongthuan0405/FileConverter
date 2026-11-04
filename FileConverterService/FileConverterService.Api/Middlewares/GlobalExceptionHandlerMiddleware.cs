@@ -23,6 +23,12 @@ namespace FileConverterService.Api.Middlewares
             {
                 await next(context);
             }
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+            {
+                _logger.LogDebug("Request {TraceIdentifier} was aborted by the client.", context.TraceIdentifier);
+                if (!context.Response.HasStarted)
+                    context.Response.StatusCode = 499;
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, ex.Message);

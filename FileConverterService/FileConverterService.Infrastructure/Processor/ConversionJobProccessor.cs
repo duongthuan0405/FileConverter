@@ -1,4 +1,5 @@
 using FileConverterService.Application.Converters;
+using FileConverterService.Application.Jobs;
 using FileConverterService.Application.HelperServices.Storage;
 using FileConverterService.Application.Queues;
 using FileConverterService.Application.Repositories;
@@ -10,15 +11,16 @@ namespace FileConverterService.Infrastructure.Processors;
 
 public sealed class ConversionJobProccessor : BackgroundService
 {
-    private readonly IConversionJobQueue _queue;
+    private readonly IConversionJobAtomicOperations _jobAtomicOperations;
     private readonly IJobConversionRepository _repository;
     private readonly IFileManagerService _fileManager;
     private readonly IDocumentConverter _converter;
     private readonly ILogger<ConversionJobProccessor> _logger;
 
-    public ConversionJobProccessor(IConversionJobQueue queue, IJobConversionRepository repository, IFileManagerService fileManager, IDocumentConverter converter, ILogger<ConversionJobProccessor> logger)
+    public ConversionJobProccessor(IConversionJobAtomicOperations jobAtomicOperations, IJobConversionRepository repository, IFileManagerService fileManager, IDocumentConverter converter, ILogger<ConversionJobProccessor> logger)
     {
-        _queue = queue; _repository = repository; _fileManager = fileManager; _converter = converter; _logger = logger;
+        _repository = repository; _fileManager = fileManager; _converter = converter; _logger = logger;
+        _jobAtomicOperations = jobAtomicOperations;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -42,7 +44,7 @@ public sealed class ConversionJobProccessor : BackgroundService
                 {
                     // A terminal state can be left behind if the previous ACK failed.
                     if (job.Status is ConversionJobStatus.Completed or ConversionJobStatus.Failed)
-                        await _queue.AcknowledgeAsync(claim, stoppingToken);
+                        await _jobAtomicOperations.AcknowledgeAsync(claim, stoppingToken);
                     _logger.LogWarning("Skipping job {JobId} in status {Status}.", jobId, job.Status);
                     continue;
                 }
@@ -75,7 +77,7 @@ public sealed class ConversionJobProccessor : BackgroundService
 
                 await _repository.UpdateAsync(job, stoppingToken);
                 // Only ACK after Complete/Fail has been persisted, not inside the save callback.
-                await _queue.AcknowledgeAsync(claim, stoppingToken);
+                await _jobAtomicOperations.AcknowledgeAsync(claim, stoppingToken);
                 if (job.Status == ConversionJobStatus.Completed)
                 {
                     _logger.LogInformation(
@@ -91,9 +93,44 @@ public sealed class ConversionJobProccessor : BackgroundService
         }
     }
 
-    private async IAsyncEnumerable<ConversionJobClaim> ReadJobs([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    private async IAsyncEnumerable<ConversionJobClaim> ReadJobs(
+    [System.Runtime.CompilerServices.EnumeratorCancellation]
+    CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
-            yield return await _queue.DequeueAsync(cancellationToken);
+        {
+            ConversionJobClaim claim;
+
+            try
+            {
+                claim = await _jobAtomicOperations.ClaimAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+                yield break;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogError(
+                    exception,
+                    "Could not dequeue a job. Retrying in 3 seconds.");
+
+                try
+                {
+                    await Task.Delay(
+                        TimeSpan.FromSeconds(3), cancellationToken);
+                }
+                catch (OperationCanceledException)
+                    when (cancellationToken.IsCancellationRequested)
+                {
+                    yield break;
+                }
+
+                continue;
+            }
+
+            yield return claim;
+        }
     }
 }

@@ -64,6 +64,7 @@ namespace FileConverterService.Infrastructure.HelperServices.Storage
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(fileStream);
+            cancellationToken.ThrowIfCancellationRequested();
 
             key ??= Guid.NewGuid().ToString("N");
             var filePath = ResolvePath(key);
