@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { default: test } = require("node:test");
 
-const URL = "http://localhost/forms/libreoffice/convert";
+const URL = "http://localhost:5156/api/conversions";
 
 async function callApi(index, inputPath, cancel_after_ms = null)
 {
@@ -80,7 +80,28 @@ async function main() {
   fs.mkdirSync(outputDir, { recursive: true });
   const start = new Date();
   
-  const promises = [callApi(1, short), callApi(2, short), callApi(3, short)];
+  const promises = [
+    callApi(1, short), 
+    callApi(2, long), 
+    callApi(3, short), 
+    callApi(4, long), 
+    callApi(5, short), 
+    callApi(6, short), 
+    callApi(7, long),
+    callApi(8, long),
+    callApi(9, long), 
+    callApi(10, long), 
+    callApi(11, long), 
+    callApi(12, long), 
+    callApi(13, long), 
+    callApi(14, long), 
+    callApi(15, long),   
+    callApi(16, short),
+    callApi(17, short),
+    callApi(18, short),
+    callApi(19, short),
+    callApi(20, short)
+  ];
 
   await Promise.all(promises);
   const end = new Date();

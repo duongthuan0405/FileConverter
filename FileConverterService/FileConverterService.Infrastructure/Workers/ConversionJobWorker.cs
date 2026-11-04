@@ -6,24 +6,44 @@ using FileConverterService.Application.Repositories;
 using FileConverterService.Domain.Enums;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
-namespace FileConverterService.Infrastructure.Processors;
+namespace FileConverterService.Infrastructure.Workers;
 
-public sealed class ConversionJobProccessor : BackgroundService
+public sealed class ConversionJobWorker : BackgroundService
 {
     private readonly IConversionJobAtomicOperations _jobAtomicOperations;
     private readonly IJobConversionRepository _repository;
     private readonly IFileManagerService _fileManager;
     private readonly IDocumentConverter _converter;
-    private readonly ILogger<ConversionJobProccessor> _logger;
+    private readonly ILogger<ConversionJobWorker> _logger;
+    private readonly int _maxConcurrentJobs;
 
-    public ConversionJobProccessor(IConversionJobAtomicOperations jobAtomicOperations, IJobConversionRepository repository, IFileManagerService fileManager, IDocumentConverter converter, ILogger<ConversionJobProccessor> logger)
+    public ConversionJobWorker(IConversionJobAtomicOperations jobAtomicOperations, IJobConversionRepository repository, IFileManagerService fileManager, IDocumentConverter converter, IOptions<ConversionWorkerOptions> options, ILogger<ConversionJobWorker> logger)
     {
         _repository = repository; _fileManager = fileManager; _converter = converter; _logger = logger;
         _jobAtomicOperations = jobAtomicOperations;
+        _maxConcurrentJobs = options.Value.MaxConcurrentJobs;
+        if (_maxConcurrentJobs < 1)
+            throw new ArgumentOutOfRangeException(nameof(options), "MaxConcurrentJobs must be greater than zero.");
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation("Starting {MaxConcurrentJobs} concurrent conversion loops.", _maxConcurrentJobs);
+        try
+        {
+            // Fixed async loops bound concurrency without prefetching a batch of jobs.
+            await Task.WhenAll(Enumerable.Range(0, _maxConcurrentJobs)
+                .Select(_ => ProcessJobsAsync(stoppingToken)));
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            
+        }
+    }
+
+    private async Task ProcessJobsAsync(CancellationToken stoppingToken)
     {
         await foreach (var claim in ReadJobs(stoppingToken))
         {

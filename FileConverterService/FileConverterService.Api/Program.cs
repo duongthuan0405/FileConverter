@@ -8,7 +8,8 @@ namespace FileConverterService.Api
     {
         public static void Main(string[] args)
         {
-            Env.Load();
+            // Deployment environment variables take precedence over local .env values.
+            Env.NoClobber().Load();
             var builder = WebApplication.CreateBuilder(args);
 
             // Add services to the container.

@@ -1,9 +1,9 @@
+using FileConverterService.Application.Converters;
 using FileConverterService.Application.HelperServices.Storage;
 using FileConverterService.Application.Jobs;
 using FileConverterService.Infrastructure.AtomicOperations;
-using FileConverterService.Application.Converters;
-using FileConverterService.Infrastructure.HelperServices.Storage;
 using FileConverterService.Infrastructure.Converters;
+using FileConverterService.Infrastructure.HelperServices.Storage;
 using FileConverterService.Infrastructure.Queues;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;

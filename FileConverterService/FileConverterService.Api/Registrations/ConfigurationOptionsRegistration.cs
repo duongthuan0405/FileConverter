@@ -2,6 +2,7 @@ using FileConverterService.Infrastructure.HelperServices.Storage;
 using FileConverterService.Infrastructure.Converters;
 using Microsoft.Extensions.Options;
 using FileConverterService.Infrastructure.Queues;
+using FileConverterService.Infrastructure.Workers;
 
 namespace FileConverterService.Api.Registrations;
 
@@ -12,6 +13,12 @@ public static class ConfigurationOptionsRegistration
         IHostEnvironment environment,
         IConfiguration configuration)
     {
+        services.AddOptions<ConversionWorkerOptions>()
+            .Bind(configuration.GetSection("WORKER"))
+            .Validate(options => options.MaxConcurrentJobs > 0,
+                "WORKER:MaxConcurrentJobs is required and must be a positive integer.")
+            .ValidateOnStart();
+
         services.AddOptions<RedisOptions>()
             .Bind(configuration.GetSection("REDIS"))
             .Validate(options => !string.IsNullOrWhiteSpace(options.ConnectionString),

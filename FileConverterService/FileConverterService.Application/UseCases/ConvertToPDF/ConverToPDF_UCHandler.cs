@@ -39,10 +39,8 @@ public class ConverToPDF_UCHandler : IRequestHandler<ConverToPDF_UCInput, Conver
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Finish acceptance independently of HTTP cancellation.
-                await _jobAtomicOperations.SubmitAsync(p.Job, CancellationToken.None);
             }
-            catch
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 try
                 {
@@ -51,12 +49,15 @@ public class ConverToPDF_UCHandler : IRequestHandler<ConverToPDF_UCInput, Conver
                 catch (Exception cleanupException)
                 {
                     _logger.LogError(cleanupException,
-                        "Could not delete input {InputStorageKey} for unsuccessful submission {JobId}.",
+                        "Could not delete input {InputStorageKey} for job {JobId} canceled before submission.",
                         p.Job.InputStorageKey, p.Job.Id);
                 }
                 throw;
             }
 
+            // A failed response does not prove Redis rejected the job.
+            // Retain input on submission errors for later reconciliation.
+            await _jobAtomicOperations.SubmitAsync(p.Job, CancellationToken.None);
             return p.Job.Id;
         }).ToList();
 

@@ -48,11 +48,7 @@ namespace FileConverterService.Api.Controllers
                     });
                 }
 
-                ConverToPDF_UCInput inp = new()
-                {
-                    Files = openFiles
-                };
-
+                var inp = new ConverToPDF_UCInput { Files = openFiles };
                 var res = await _sender.Send(inp, cancellationToken);
                 return StatusCode(StatusCodes.Status202Accepted, new ApiSuccessResponse<ConverToPDF_UCOutput>(res));
             }
