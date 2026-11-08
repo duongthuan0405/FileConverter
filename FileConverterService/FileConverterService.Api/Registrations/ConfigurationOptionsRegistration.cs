@@ -12,6 +12,18 @@ public static class ConfigurationOptionsRegistration
         IHostEnvironment environment,
         IConfiguration configuration)
     {
+        services.AddOptions<RecoveryOptions>()
+            .Bind(configuration.GetSection("RECOVERY"))
+            .Validate(options => options.HeartbeatTimeoutSeconds is > 0 and <= 86400,
+                "RECOVERY:HeartbeatTimeoutSeconds must be between 1 and 86400.")
+            .Validate(options => options.HeartbeatTimeoutSeconds >= 3L * configuration.GetValue("WORKER:HeartbeatIntervalSeconds", 10),
+                "RECOVERY:HeartbeatTimeoutSeconds must be at least three heartbeat intervals.")
+            .Validate(options => options.IntervalSeconds is > 0 and <= 86400,
+                "RECOVERY:IntervalSeconds must be between 1 and 86400.")
+            .Validate(options => options.ScanPageSize is > 0 and <= 10000,
+                "RECOVERY:ScanPageSize must be between 1 and 10000.")
+            .ValidateOnStart();
+
         services.AddOptions<ReadinessOptions>()
             .Bind(configuration.GetSection("READINESS"))
             .Validate(options => options.TimeoutSeconds is > 0 and <= 60,
@@ -22,6 +34,8 @@ public static class ConfigurationOptionsRegistration
             .Bind(configuration.GetSection("CLEANUP"))
             .Validate(options => options.RetentionMinutes is > 0 and <= 525600,
                 "CLEANUP:RetentionMinutes must be between 1 and 525600.")
+            .Validate(options => options.InterruptedRetentionMinutes is > 0 and <= 525600,
+                "CLEANUP:InterruptedRetentionMinutes must be between 1 and 525600.")
             .Validate(options => options.IntervalSeconds is > 0 and <= 86400,
                 "CLEANUP:IntervalSeconds must be between 1 and 86400.")
             .Validate(options => options.BatchSize is > 0 and <= 10000,
@@ -32,6 +46,8 @@ public static class ConfigurationOptionsRegistration
             .Bind(configuration.GetSection("WORKER"))
             .Validate(options => options.MaxConcurrentJobs > 0,
                 "WORKER:MaxConcurrentJobs is required and must be a positive integer.")
+            .Validate(options => options.HeartbeatIntervalSeconds is > 0 and <= 3600,
+                "WORKER:HeartbeatIntervalSeconds must be between 1 and 3600.")
             .ValidateOnStart();
 
         services.AddOptions<RedisOptions>()

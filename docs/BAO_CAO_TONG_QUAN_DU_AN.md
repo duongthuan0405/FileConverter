@@ -1,100 +1,33 @@
-# BÁO CÁO TỔNG QUAN CẤU TRÚC VÀ CƠ CHẾ HOẠT ĐỘNG FILECONVERTER
+# BÁO CÁO TỔNG QUAN DỰ ÁN FILECONVERTER
 
-Ngày lập: **06/11/2026**. Phạm vi: mã nguồn và cấu hình đang có trong workspace, bao gồm các thay đổi chưa commit tại thời điểm đọc.
+Ngày cập nhật: **08/11/2026**.
 
-## Mục lục
+Báo cáo đi theo từng project (layer), từng class và các method thuộc class; tiếp theo là ba luồng convert, cleanup, recovery và các tham số cấu hình. Nội dung mô tả hành vi đã triển khai trong mã nguồn.
 
-1. [Mục tiêu và phạm vi hệ thống](#1-mục-tiêu-và-phạm-vi-hệ-thống)
-2. [Cấu trúc repository](#2-cấu-trúc-repository)
-3. [Vai trò từng project](#3-vai-trò-từng-project)
-4. [Mô hình dữ liệu và lưu trữ](#4-mô-hình-dữ-liệu-và-lưu-trữ)
-5. [Khởi động, cấu hình và dependency injection](#5-khởi-động-cấu-hình-và-dependency-injection)
-6. [API và các luồng nghiệp vụ](#6-api-và-các-luồng-nghiệp-vụ)
-7. [Các thuật toán và cơ chế kỹ thuật](#7-các-thuật-toán-và-cơ-chế-kỹ-thuật)
-8. [Hạ tầng Redis, nginx và Gotenberg](#8-hạ-tầng-redis-nginx-và-gotenberg)
-9. [Xử lý lỗi và các tình huống sự cố](#9-xử-lý-lỗi-và-các-tình-huống-sự-cố)
-10. [Kiểm thử và phạm vi kiểm chứng](#10-kiểm-thử-và-phạm-vi-kiểm-chứng)
-11. [Đánh giá và hướng hoàn thiện](#11-đánh-giá-và-hướng-hoàn-thiện)
-12. [Bản đồ mã nguồn tham khảo](#12-bản-đồ-mã-nguồn-tham-khảo)
-13. [Cleanup theo thời gian lưu giữ](#13-cleanup-theo-thời-gian-lưu-giữ)
+## 1. Tổng quan và kiến trúc
 
-## 1. Mục tiêu và phạm vi hệ thống
+FileConverter là gateway chuyển tài liệu Word thành PDF theo mô hình job bất đồng bộ. Client upload một hoặc nhiều file, nhận JobId cho từng file được tiếp nhận, tra cứu trạng thái và tải PDF khi job Completed. API không giữ request upload để đợi hoàn thành conversion.
 
-FileConverter là gateway tiếp nhận tài liệu, lưu đầu vào, tạo tác vụ chuyển đổi và dùng Gotenberg/LibreOffice để tạo PDF. Client không phải giữ kết nối HTTP trong suốt thời gian chuyển đổi: client nhận mã job, tra cứu trạng thái rồi tải kết quả khi hoàn thành.
+Ứng dụng .NET tiếp nhận file, điều phối và quản lý vòng đời job. Gotenberg/LibreOffice thực hiện chuyển đổi thực tế. Redis lưu trạng thái và hàng đợi; filesystem lưu Word/PDF. nginx phân phối request tới các container Gotenberg.
 
-Một file tương ứng một `ConversionJob`. Một request được gửi tối đa năm file theo validator hiện tại; các file được tiếp nhận độc lập và có thể thành công một phần.
-
-| Khả năng | Hiện trạng trong mã nguồn |
+| Khả năng | Hiện trạng |
 | --- | --- |
-| Upload nhiều file và trả job ID | Đã triển khai, HTTP 202 |
-| Chuyển đổi nền sang PDF | Đã triển khai qua hosted worker và Gotenberg |
-| Tra cứu trạng thái, tải PDF, xóa tài nguyên | Đã triển khai |
-| Định dạng đầu vào qua API | Validator chỉ chấp nhận hai MIME Word: DOC và DOCX |
-| Queue FIFO, claim receipt, ACK | Đã triển khai bằng Redis Lua |
-| Chống submit lặp cùng một job | Có fingerprint; giới hạn được phân tích tại mục 7.2 |
-| Chuyển đổi sync, HTML sang PDF, ký số | Chưa có use case/endpoint tương ứng |
-| Tự phục hồi receipt/job bị treo | Chưa triển khai |
-| Cleanup theo TTL | Đã triển khai cho Completed/Failed; mặc định giữ 10 phút, kiểm tra mỗi 30 giây |
-| Readiness kiểm tra dependency | Đã kiểm tra Redis, storage đọc/ghi/xóa và Gotenberg /health; trả 200 hoặc 503 |
+| Upload và tạo job | Đã triển khai; nhận 1–5 file DOC/DOCX, tối đa 20 MiB/file |
+| Chuyển đổi nền | Đã triển khai; ConversionJobWorker lấy job từ Redis và gọi Gotenberg |
+| Tra cứu, tải PDF và DELETE | Đã triển khai bằng các use case riêng |
+| Heartbeat | Đã triển khai; cập nhật LastHeartbeatAt cho từng receipt trong lúc xử lý |
+| Phục hồi job Pending bị bỏ dở | Đã triển khai; RecoveryWorker đưa job lại queue và thu hồi receipt cũ |
+| Dọn receipt còn sót | Đã triển khai cho Completed, Failed, Interrupted và job không còn metadata |
+| Xử lý job Processing mất heartbeat | Đã triển khai; chuyển Interrupted, thu hồi receipt và lên lịch cleanup |
+| Cleanup tài nguyên | Đã triển khai; Sorted Set xác định hạn dọn, xóa file trước rồi metadata/member |
+| Hoãn cleanup lỗi | Đã triển khai; dời score về thời điểm retry để không giữ mãi đầu batch |
+| Readiness | Đã triển khai; Redis, storage và Gotenberg; HTTP 200 hoặc 503 |
 
-Các tên tính năng, route và namespace trong báo cáo bám theo code hiện tại. Tài liệu luồng cũ trong `.agents` có cả thiết kế tương lai; không dùng các mô tả đó làm bằng chứng tính năng đã tồn tại.
+**Phạm vi recovery:** hệ thống xử lý job/receipt bị bỏ dở, nhưng không tự convert lại job Interrupted hoặc lấy lại PDF từ một HTTP response đã mất. Interrupted là kết quả ghi nhận gián đoạn của gateway, không phải kết luận conversion phía engine đã dừng.
 
-## 2. Cấu trúc repository
+### 1.1. Các tầng và hướng phụ thuộc
 
-```text
-FileConverter/
-├── FileConverterService/
-│   ├── FileConverterService.slnx
-│   ├── FileConverterService.Api/
-│   │   ├── Controllers/
-│   │   ├── ApiResponseModels/
-│   │   ├── Middlewares/
-│   │   ├── Registrations/
-│   │   ├── Constants/
-│   │   ├── Properties/
-│   │   └── Program.cs
-│   ├── FileConverterService.Application/
-│   │   ├── UseCases/
-│   │   │   ├── ConvertToPDF/
-│   │   │   ├── GetJob/
-│   │   │   ├── GetFileOfJob/
-│   │   │   └── DeleteResourceRelatedToJob/
-│   │   ├── Jobs/
-│   │   ├── Repositories/
-│   │   ├── Converters/
-│   │   ├── HelperServices/Storage/
-│   │   ├── Common/Behaviors/
-│   │   ├── BusinessExceptions/
-│   │   └── Constants/
-│   ├── FileConverterService.Domain/
-│   │   ├── Entities/
-│   │   └── Enums/
-│   └── FileConverterService.Infrastructure/
-│       ├── AtomicOperations/
-│       ├── Repositories/
-│       ├── Converters/
-│       ├── HelperServices/Storage/
-│       ├── Extensions/
-│       ├── Options/
-│       └── Workers/
-├── Redis/
-│   └── docker-compose.yml
-├── LibreOffice/
-│   ├── Gotenberg/                 # Môi trường một container và script thử nghiệm
-│   └── GotenbergCluster/          # nginx, cấu hình cụm và script thử nghiệm
-├── .agents/skills/               # Hướng dẫn kiến trúc và flow
-├── docs/
-│   └── BAO_CAO_TONG_QUAN_DU_AN.md
-└── README.md
-```
-
-`bin/`, `obj/`, file input/output thử nghiệm và dữ liệu runtime không được liệt kê chi tiết trong cây trên. `README.md` hiện chưa có nội dung giới thiệu. Các file `Class1.cs` trong Domain và Infrastructure là phần khung còn lại, không tham gia luồng nghiệp vụ được mô tả.
-
-Solution chính chứa bốn project dịch vụ. Các project kiểm thử .NET đã được gỡ khỏi repository.
-
-## 3. Vai trò từng project
-
-### 3.1. Sơ đồ phụ thuộc
+Bốn project cùng sử dụng .NET 10, bật nullable reference types và implicit usings.
 
 ```mermaid
 flowchart TD
@@ -104,748 +37,942 @@ flowchart TD
     APP --> DOM[FileConverterService.Domain]
 ```
 
-Đây là hướng `ProjectReference` trực tiếp trong các `.csproj`. Infrastructure sử dụng kiểu Domain thông qua phụ thuộc bắc cầu từ Application. Domain không tham chiếu project nào khác.
+Mũi tên thể hiện ProjectReference trực tiếp. Infrastructure sử dụng kiểu Domain thông qua phụ thuộc bắc cầu của Application.
 
-Kiến trúc kết hợp Clean Architecture với cách tổ chức theo use case: quy tắc trạng thái nằm trong Domain, điều phối nghiệp vụ nằm trong Application, tích hợp kỹ thuật nằm trong Infrastructure, HTTP nằm trong Api.
-
-### 3.2. FileConverterService.Domain — mô hình nghiệp vụ
-
-**Vai trò:** biểu diễn job và quy tắc chuyển trạng thái, không phụ thuộc ASP.NET Core, Redis hoặc HTTP client.
-
-| Thành phần | Nội dung và vai trò |
-| --- | --- |
-| `Entities/ConversionJob.cs` | Thông tin file, storage key, trạng thái, thời điểm và lỗi; cung cấp `Start`, `Complete`, `Fail` |
-| `Entities/ConversionJobClaim.cs` | Record bất biến chứa `JobId`, `ReceiptId`; mô tả một lần nhận job |
-| `Enums/ConversionJobStatus.cs` | Các trạng thái Pending, Processing, Completed, Failed |
-
-`ConversionJobClaim` hiện nằm trong namespace `FileConverterService.Domain.Entities`. `ReceiptId` khác `JobId`: job là tác vụ, receipt là bằng chứng của một lần giao tác vụ cho worker.
-
-### 3.3. FileConverterService.Application — hợp đồng và use case
-
-**Vai trò:** quyết định cần làm gì cho từng yêu cầu, thông qua interface thay vì gọi Redis/ổ đĩa/Gotenberg trực tiếp.
-
-| Thư mục | Nội dung và vai trò |
-| --- | --- |
-| `UseCases/ConvertToPDF` | Input, output, validator và handler tiếp nhận upload, lưu input, submit job |
-| `UseCases/GetJob` | Đọc metadata và trả trạng thái job |
-| `UseCases/GetFileOfJob` | Kiểm tra hoàn thành, mở stream PDF và xác định tên tải về |
-| `UseCases/DeleteResourceRelatedToJob` | Chặn xóa job đang hoạt động; xóa file và metadata của job kết thúc |
-| `Jobs` | `IConversionJobAtomicOperations`: submit, claim, acknowledge |
-| `Jobs/JobCleanupService` | Dùng chung cho DELETE và cleanup tự động; chỉ dọn Completed/Failed, xóa file trước metadata |
-| `Repositories` | `IJobConversionRepository`: thêm, đọc, cập nhật, xóa metadata |
-| `Converters` | `IDocumentConverter`: chuyển input stream sang PDF, nhận callback lưu kết quả |
-| `HelperServices/Storage` | `IFileManagerService`: đọc, ghi, ghi nguyên tử, xóa và kiểm tra file |
-| `Common/Behaviors` | `ValidationBehavior`: chạy FluentValidation trước handler |
-| `BusinessExceptions` | Ngoại lệ nghiệp vụ cho HTTP 400/401/403/404/409 |
-| `Constants` | `BussinessRuleMessage`, `ApplicationErrorMessage`: thông báo dùng chung |
-
-Mỗi use case sử dụng `IRequest<TOutput>` và `IRequestHandler<TInput,TOutput>` của MediatR. `AssemblyReference` cung cấp điểm xác định assembly để đăng ký handler/validator bằng reflection.
-
-Tên `ConverToPDF_*` và `BussinessRuleMessage` giữ nguyên cách viết hiện có trong mã nguồn.
-
-### 3.4. FileConverterService.Infrastructure — hiện thực kỹ thuật
-
-**Vai trò:** triển khai các interface của Application bằng công nghệ cụ thể, đồng thời chạy worker xử lý nền.
-
-| Thư mục/thành phần | Vai trò |
-| --- | --- |
-| `Repositories/RedisJobCleanupSchedule` | Đọc Sorted Set theo hạn; xóa metadata và member bằng Lua |
-| `AtomicOperations/RedisConversionJobAtomicOperations` | Lua script cho submit, claim, ACK; kiểm soát idempotency khi submit |
-| `Repositories/RedisJobConversionRepository` | Đọc/ghi metadata dưới dạng Redis hash |
-| `Repositories/InMemoryJobConversionRepository` | Lưu object trong `ConcurrentDictionary`; chưa được đăng ký làm repository runtime |
-| `Extensions/RedisHashExtensions.*` | Ánh xạ object ↔ hash entries bằng reflection và JSON |
-| `Converters/GotenbergDocumentConverter` | Multipart HTTP, retry, deadline, đọc PDF stream và gọi callback |
-| `Converters/GotenbergOptions` | Địa chỉ Gotenberg, timeout, tổng deadline, số attempt, khoảng retry |
-| `HelperServices/Storage/LocalFileManagerService` | Lưu trữ file trên ổ đĩa, giới hạn đường dẫn trong storage root |
-| `HelperServices/Storage/StorageOptions` | Đường dẫn root lưu input/output |
-| `Options/RedisOptions` | Connection string, tên Redis key, khoảng polling |
-| `Workers/ConversionJobWorker` | Các vòng lặp bất đồng bộ lấy job, chuyển đổi, lưu trạng thái và ACK |
-| `Workers/CleanupWorker` | Đọc cleanup set theo batch, dọn Completed/Failed hết hạn và thử lại lỗi ở vòng sau |
-| `Workers/ConversionWorkerOptions` | `MaxConcurrentJobs` cho từng instance ứng dụng |
-
-`RedisOptions` hiện nằm trong `Infrastructure.Options`; thư mục `Infrastructure/Queues` cũ không còn là vị trí của lớp này. Các options khác hiện vẫn nằm cạnh thành phần sử dụng chúng.
-
-### 3.5. FileConverterService.Api — giao tiếp HTTP và composition root
-
-**Vai trò:** nhận request, chuyển thành input use case, gửi qua MediatR và chuẩn hóa response; lựa chọn các implementation qua DI.
-
-| Thành phần | Vai trò |
-| --- | --- |
-| `Controllers/ConversionsController` | Upload, tra cứu, download, delete |
-| `Controllers/CheckController` | Endpoint health/ready |
-| `ApiResponseModels` | `ApiResponse<T>`, `ApiSuccessResponse<T>`, `ApiErrorResponse` |
-| `Middlewares/GlobalExceptionHandlerMiddleware` | Chuyển exception thành HTTP status và JSON lỗi; xử lý client abort |
-| `Registrations` | Đăng ký use case, validator, repository, storage, Redis, converter, worker và options |
-| `Program.cs` | Nạp môi trường, tạo host, đăng ký dependency, thiết lập HTTP pipeline |
-| `Properties/launchSettings.json` | Profile chạy local |
-| `FileConverterService.Api.http` | File hỗ trợ gọi thử API |
-
-Response JSON có các trường `success`, `message`, `data`. Với lỗi validation/nghiệp vụ có chi tiết, `data` chứa dictionary tên trường → danh sách lỗi. Download thành công trả binary PDF, không bọc trong JSON.
-
-## 4. Mô hình dữ liệu và lưu trữ
-
-### 4.1. ConversionJob
-
-| Thuộc tính | Ý nghĩa |
-| --- | --- |
-| `Id` | GUID định danh job |
-| `OriginalFileName` | Tên file đầu vào dùng cho chuyển đổi và tên download |
-| `ContentType` | MIME do request cung cấp |
-| `InputStorageKey` | Đường dẫn tương đối đến file đầu vào |
-| `OutputStorageKey` | Đường dẫn tương đối đến PDF, được gán khi hoàn thành |
-| `Status` | Trạng thái nghiệp vụ |
-| `CreatedAt` | Thời điểm tạo, UTC |
-| `ProccessedAt` | Thời điểm bắt đầu xử lý, UTC; tên thuộc tính hiện viết như trong code |
-| `CompletedAt` | Thời điểm hoàn thành hoặc thất bại, UTC |
-| `Error` | Thông báo lỗi khi thất bại |
-
-`GetJob_UCOutput` xuất `ProccessedAt` thành trường `ProcessedAt`. Phần lớn setter trong entity là private, riêng `ProccessedAt` có setter public; constructor không tham số hỗ trợ khôi phục object từ Redis.
-
-```mermaid
-stateDiagram-v2
-    [*] --> Pending: Khởi tạo
-    Pending --> Processing: Start()
-    Processing --> Completed: Complete(outputKey)
-    Processing --> Failed: Fail(error)
-```
-
-Entity kiểm tra trạng thái trước mỗi chuyển đổi. Hiện chưa có nhánh retry từ Failed về Pending, trạng thái Cancelled hoặc phần trăm tiến độ. Kiểm tra trạng thái này diễn ra trên object trong bộ nhớ, chưa phải compare-and-set phân tán trong Redis.
-
-### 4.2. Ba nhóm dữ liệu Redis
-
-| Dữ liệu | Kiểu Redis | Tên mặc định | Nội dung |
-| --- | --- | --- | --- |
-| Metadata job | Hash | `fileconverter:storage:job:<guid>` | Các thuộc tính job và `_SubmissionFingerprint` |
-| Pending queue | List | `fileconverter:queue` | Job ID dạng GUID `N`, không dấu gạch nối |
-| Receipt đang xử lý | Hash | `fileconverter:receipt` | Field = receipt ID dạng `N`; value = job ID dạng `N` |
-
-Metadata key được tạo bằng nội suy `job.Id`, nên GUID ở phần tên key có dấu gạch nối theo định dạng mặc định. Queue, receipt và API output dùng `ToString("N")`. Hai biểu diễn đều chỉ cùng GUID; không nên nhầm chúng khi truy vấn Redis thủ công.
-
-`BatchKey` có trong options và được repository nhận vào, nhưng chưa có tính năng quản lý batch sử dụng nó.
-
-Ví dụ minh họa:
-
-```text
-fileconverter:storage:job:11111111-1111-1111-1111-111111111111   [HASH]
-  _SubmissionFingerprint -> A1B2...
-  OriginalFileName       -> "report.docx"
-  Status                 -> 0
-  InputStorageKey        -> "input/<uploadGuid>.docx"
-  ...
-
-fileconverter:queue                                           [LIST]
-  11111111111111111111111111111111
-
-fileconverter:receipt                                         [HASH, sau claim]
-  <receiptGuidN> -> 11111111111111111111111111111111
-```
-
-Giá trị các thuộc tính job được serialize JSON riêng từng field; chuỗi vì vậy có dấu nháy JSON. `_SubmissionFingerprint` là chuỗi hash được script ghi trực tiếp, không qua serializer từng thuộc tính.
-
-### 4.3. Dữ liệu file trên đĩa
-
-```text
-<API ContentRootPath>/Storage/
-├── input/<uploadGuidN>.<extension>
-└── output/<jobGuidN>.pdf
-```
-
-File input dùng GUID riêng, không phải job ID. File tạm khi ghi có hậu tố `.<guidN>.tmp` và nằm cùng thư mục với file đích. Redis giữ metadata và mã tham chiếu, không lưu binary tài liệu/PDF.
-
-## 5. Khởi động, cấu hình và dependency injection
-
-### 5.1. Trình tự khởi động
-
-1. `Env.NoClobber().Load()` nạp `.env` mà không ghi đè biến môi trường đã có.
-2. `WebApplication.CreateBuilder` tạo host và hệ thống configuration.
-3. Đăng ký controller, OpenAPI, MediatR, validator, middleware, hạ tầng, worker và repository.
-4. Bind options từ các section `WORKER`, `REDIS`, `GOTENBERG`; thiết lập storage root từ content root.
-5. `ValidateOnStart` kiểm tra các ràng buộc cấu hình khi host khởi động.
-6. Thiết lập middleware exception ở đầu pipeline, OpenAPI trong Development, HTTPS redirection, authorization và route controller.
-7. Hosted worker chuyển đổi và `CleanupWorker` bắt đầu xử lý nền cùng vòng đời ứng dụng.
-
-`UseAuthorization()` có trong pipeline nhưng chưa có cấu hình authentication hoặc chính sách bảo vệ các endpoint trong code đã đọc.
-
-### 5.2. Các đăng ký chính
-
-| Hợp đồng | Implementation | Vòng đời/cách đăng ký |
+| Project | Trách nhiệm | Phụ thuộc trực tiếp |
 | --- | --- | --- |
-| `IFileManagerService` | `LocalFileManagerService` | Singleton |
-| `IConnectionMultiplexer` | `ConnectionMultiplexer` | Singleton; kết nối theo Redis options |
-| `IConversionJobAtomicOperations` | `RedisConversionJobAtomicOperations` | Singleton |
-| `IJobCleanupSchedule` | `RedisJobCleanupSchedule` | Singleton |
-| `IJobCleanupService` | `JobCleanupService` | Singleton |
-| `IJobConversionRepository` | `RedisJobConversionRepository` | Singleton |
-| `IDocumentConverter` | `GotenbergDocumentConverter` | Typed client qua `AddHttpClient` |
-| Hosted worker | `ConversionJobWorker` | `AddHostedService` |
-| Hosted cleanup worker | `CleanupWorker` | `AddHostedService` |
-| Exception middleware | `GlobalExceptionHandlerMiddleware` | Transient |
-| Handler và validator | Quét Application assembly | MediatR và FluentValidation |
+| Domain | Entity, trạng thái và quy tắc chuyển trạng thái | Không phụ thuộc project khác |
+| Application | Use case, DTO, validator và interface | Domain |
+| Infrastructure | Redis, filesystem, HTTP converter và worker | Application |
+| Api | Endpoint HTTP, middleware, cấu hình và DI | Application, Infrastructure |
 
-Worker nhận converter qua constructor và giữ reference trong vòng đời worker. Repository in-memory không được chọn trong cấu hình DI hiện tại.
+Application gọi interface để không phụ thuộc Redis/HTTP/filesystem cụ thể. Api là composition root, chọn implementation. Các tính năng trong Application được chia theo use case, mỗi nhóm có input, output, validator và handler riêng.
 
-### 5.3. Cấu hình chính
-
-| Section/tham số | Mặc định trong options hoặc cách thiết lập |
-| --- | --- |
-| `WORKER:MaxConcurrentJobs` | Không có giá trị dương mặc định; phải cấu hình > 0 |
-| `REDIS:ConnectionString` | `localhost:6379` |
-| `REDIS:QueueKey` | `fileconverter:queue` |
-| `REDIS:ReceiptKey` | `fileconverter:receipt` |
-| `REDIS:JobKey` | `fileconverter:storage:job` |
-| `REDIS:BatchKey` | `fileconverter:storage:batch` |
-| `REDIS:PollIntervalMilliseconds` | 250 ms |
-| `GOTENBERG:BaseUrl` | Rỗng; phải cung cấp URL tuyệt đối |
-| `GOTENBERG:TimeoutInMinutes` | 3 phút |
-| `GOTENBERG:DeadlineInMinutes` | 5 phút |
-| `GOTENBERG:MaxAttempts` | 1 |
-| `GOTENBERG:RetryDelayInMinutes` | 0 |
-| `CLEANUP:RetentionMinutes` | 10 phút tính từ `CompletedAt` |
-| `CLEANUP:IntervalSeconds` | 30 giây chờ giữa các vòng cleanup |
-| `CLEANUP:BatchSize` | Tối đa 100 job tới hạn mỗi vòng |
-| `REDIS:CleanupKey` | `fileconverter:cleanup`, Sorted Set lưu jobId và hạn dọn |
-| `StorageOptions.RootPath` | `<ContentRootPath>/Storage`, được cấu hình bằng code |
-
-`appsettings.json` và bản Development hiện chủ yếu chứa cấu hình logging; các giá trị bắt buộc có thể được cung cấp từ môi trường hoặc `.env`. Không đưa thông tin bí mật từ cấu hình cục bộ vào báo cáo.
-
-## 6. API và các luồng nghiệp vụ
-
-### 6.1. Danh sách endpoint thực tế
-
-| Method | Route | Tác dụng | Thành công |
-| --- | --- | --- | --- |
-| POST | `/api/conversions` | Tiếp nhận form field `files` | 202 + JSON các job ID |
-| GET | `/api/conversions/job/{jobId}` | Tra cứu trạng thái | 200 + JSON metadata chọn lọc |
-| GET | `/api/conversions/job/{jobId}/file` | Tải PDF | 200 + `application/pdf` |
-| DELETE | `/api/conversions/job/{jobId}` | Xóa tài nguyên job kết thúc | 200 + JSON kết quả |
-| GET | `/check/health` | Phản hồi liveness đơn giản | 200 + thông báo cố định |
-| GET | `/check/ready` | Kiểm tra Redis, storage và Gotenberg | 200 khi đạt; 503 khi dependency lỗi |
-
-Route hiện không có `/v1`. Upload không trả PDF trực tiếp và chưa thiết lập header `Location` trong controller.
-
-### 6.2. Flow tiếp nhận nhiều file
-
-```mermaid
-sequenceDiagram
-    actor C as Client
-    participant API as ConversionsController
-    participant V as ValidationBehavior
-    participant H as ConverToPDF handler
-    participant S as Local storage
-    participant R as Redis Lua
-    C->>API: POST multipart files
-    API->>V: Send input qua MediatR
-    V->>V: Kiểm tra toàn bộ input
-    V->>H: Input hợp lệ
-    loop Mỗi file, các task được khởi chạy song song
-        H->>S: Ghi file tạm rồi publish input
-        H->>R: Submit metadata và LPUSH job ID
-        R-->>H: Kết quả submit
-    end
-    H-->>API: TotalFile, SuccessfulUploadedFile, JobIds
-    API-->>C: 202 Accepted + JSON
-    Note over API: Dispose các input stream trong finally
-```
-
-**Cách triển khai:**
-
-1. Controller mở stream từng `IFormFile`, ánh xạ thành `FileParams` gồm tên, MIME và stream.
-2. Validation kiểm tra danh sách không rỗng, tối đa năm file; từng file có tên, stream khác null và MIME thuộc DOC/DOCX.
-3. Handler lấy basename, giữ extension, tạo storage key bằng GUID và tạo entity Pending.
-4. Mỗi file có một task lưu input nguyên tử rồi submit Redis. `Task.WhenAll` đợi các task kết thúc.
-5. Handler gom job ID của task thành công. Lỗi vận hành của một file được log và có thể trả kết quả một phần; lỗi validation xảy ra trước handler sẽ chặn cả request.
-
-Ví dụ phần `data` trong response tiếp nhận:
-
-```json
-{
-  "totalFile": 2,
-  "successfulUploadedFile": 1,
-  "jobIds": ["11111111111111111111111111111111"]
-}
-```
-
-`SuccessfulUploadedFile` chỉ đếm file đã lưu và submit thành công theo kết quả phía gọi; không có nghĩa PDF đã được tạo. Handler hiện chưa trả lỗi gắn với từng file và vẫn có thể trả 202 khi số file nhận thành công bằng 0.
-
-### 6.3. Flow xử lý nền
-
-```mermaid
-sequenceDiagram
-    participant W as Worker loop
-    participant R as Redis
-    participant S as Local storage
-    participant G as Gotenberg qua base URL
-    W->>R: Claim: pending → receipt
-    R-->>W: JobId và ReceiptId
-    W->>R: Đọc metadata
-    W->>R: Lưu Processing và thời điểm bắt đầu
-    W->>S: Mở input stream
-    W->>G: POST /forms/libreoffice/convert
-    alt Chuyển đổi và lưu thành công
-        G-->>W: PDF stream
-        W->>S: Lưu output nguyên tử qua callback
-        W->>R: Lưu Completed, output key và lịch cleanup bằng Lua
-    else Lỗi và host chưa yêu cầu dừng
-        W->>R: Lưu Failed, lỗi và lịch cleanup bằng Lua
-    end
-    W->>R: ACK đúng receipt và job
-```
-
-Một loop chỉ nhận job tiếp theo khi xử lý xong job hiện tại. Trước conversion, worker kiểm tra job tồn tại và `job.Id` đúng với claim. Với job đã Completed/Failed, worker ACK delivery đang có rồi bỏ qua; với Processing, worker bỏ qua và giữ receipt.
-
-Lỗi đọc/lưu metadata hoặc lỗi ACK được log ở lớp ngoài và receipt được giữ lại. Nếu host yêu cầu dừng, worker không tự đánh dấu Failed để che mất tình huống chưa rõ kết quả.
-
-### 6.4. Flow tra cứu trạng thái
-
-```text
-GET job/{jobId}
-→ Validator: GUID hợp lệ và khác Guid.Empty
-→ Repository đọc hash metadata
-→ Không có: 404
-→ Có: ánh xạ JobId, OriginalFileName, Status,
-       CreatedAt, ProcessedAt, CompletedAt, Error
-→ 200 JSON
-```
-
-API cung cấp trạng thái rời rạc để client polling; chưa có phần trăm tiến độ, webhook hoặc push notification.
-
-### 6.5. Flow tải PDF
-
-```text
-GET job/{jobId}/file
-→ Validate GUID → đọc metadata
-→ Job không tồn tại: 404
-→ Job chưa Completed: 409
-→ OutputStorageKey rỗng hoặc không còn file: 404
-→ Mở output stream
-→ Controller trả File(stream, "application/pdf", tên tải về)
-```
-
-Tên tải về được lấy từ basename của tên gốc và đổi extension thành `.pdf`; handler chuẩn hóa dấu phân cách trước khi lấy basename. HTTP response chịu trách nhiệm dispose stream sau khi gửi. Tải file không tự xóa job hoặc PDF.
-
-### 6.6. Flow xóa tài nguyên
-
-```text
-DELETE job/{jobId}
-→ Validate GUID → đọc metadata
-→ Không tồn tại: 404
-→ Pending hoặc Processing: 409
-→ Xóa PDF → xóa input → xóa metadata
-→ Trả JobId và Success = true
-```
-
-Nếu chưa có output key, handler vẫn thử dọn `output/<jobIdN>.pdf`, phòng trường hợp có output nhưng chưa kịp ghi metadata. Xóa file không tồn tại được storage xử lý như không có gì để xóa.
-
-DELETE và cleanup tự động dùng chung JobCleanupService. File được xóa trước, metadata và member cleanup được xóa cùng nhau bằng Lua; không có transaction xuyên Redis và filesystem. Nếu bị gián đoạn, có thể còn một phần tài nguyên. API không triển khai hủy job đang chạy và thao tác delete hiện không dọn receipt tồn đọng do ACK lỗi.
-
-### 6.7. Flow validation và xử lý ngoại lệ
-
-`ValidationBehavior` gọi các validator, gom lỗi theo tên thuộc tính rồi ném `BadRequestException`. Handler chỉ chạy khi không có lỗi.
-
-| Tình huống | HTTP status do middleware ánh xạ |
-| --- | --- |
-| BadRequestException | 400 |
-| UnauthorizedException | 401 |
-| ForbiddenException | 403 |
-| NotFoundException | 404 |
-| ConflictUniqueValueException | 409 |
-| Exception chưa được phân loại | 500 |
-| OperationCanceledException và RequestAborted đã hủy | Gán 499 nếu response chưa bắt đầu |
-
-499 ở đây là cách ghi nhận phía server; client đã ngắt kết nối có thể không nhận được response. Lỗi model binding do framework xử lý có thể có định dạng riêng vì chưa thấy cấu hình thay thế response mặc định của `[ApiController]`.
-
-## 7. Các thuật toán và cơ chế kỹ thuật
-
-### 7.1. Queue FIFO bằng LPUSH/RPOP
-
-Producer thêm bên trái bằng `LPUSH`, consumer lấy bên phải bằng `RPOP`:
-
-```text
-Submit A: [A]
-Submit B: [B, A]
-Submit C: [C, B, A]
-Claim:    A → B → C
-```
-
-Đây là FIFO theo thứ tự submit script thực sự được Redis thực thi. Trong một request nhiều file, các task chạy song song nên thứ tự vào queue có thể khác thứ tự file trong request. FIFO cũng không có nghĩa thứ tự hoàn thành giống thứ tự nhận, vì nhiều loop xử lý đồng thời.
-
-Khi queue rỗng, `ClaimAsync` chờ `PollIntervalMilliseconds` rồi thử lại; không dùng blocking pop. Khi Redis claim gặp lỗi, worker log và chờ ba giây trước khi thử lại.
-
-### 7.2. Submit nguyên tử và fingerprint SHA-256
-
-Fingerprint được tính như sau:
-
-```text
-JSON { Id, OriginalFileName, ContentType, InputStorageKey, CreatedAt }
-→ UTF-8 bytes
-→ SHA-256
-→ Chuỗi hexadecimal
-```
-
-Fingerprint xác định bộ metadata của lần submit, không phải hash nội dung file. Một HTTP upload mới tạo job ID và thời điểm mới nên không được tự gộp với upload trước dù binary giống nhau. Cơ chế này cũng không phải chữ ký xác thực.
-
-Thuật toán Lua:
-
-```text
-Kiểm tra kiểu job key và queue key
-Kiểm tra danh sách field/value hợp lệ
-Nếu metadata đã tồn tại:
-    Không có fingerprint → trả -2
-    Fingerprint khác     → trả -1
-    Fingerprint giống    → trả 0, không enqueue lại
-Nếu chưa tồn tại:
-    HSET metadata và fingerprint
-    LPUSH job ID
-    Nếu LPUSH báo lỗi: xóa hash vừa tạo, trả lỗi
-    Nếu thành công: trả 1
-```
-
-| Kết quả | Ý nghĩa phía C# |
-| --- | --- |
-| `1` | Tạo job và enqueue lần đầu |
-| `0` | Đã submit cùng metadata; không enqueue thêm |
-| `-1` | Ném lỗi: cùng job ID nhưng dữ liệu submit khác |
-| `-2` | Ném lỗi: có metadata nhưng thiếu bằng chứng submit, cần reconciliation |
-
-Lua bảo đảm các lệnh trong script không bị client khác xen ngang. Tuy nhiên, Lua Redis không tự rollback mọi thay đổi nếu có lỗi runtime; code chủ động dùng `pcall` và xóa hash mới khi LPUSH thất bại.
-
-File input được lưu trước Lua nên toàn bộ quá trình filesystem + Redis không phải một transaction. Nếu mất phản hồi Redis, client có thể không biết script đã thành công hay chưa; handler giữ input để tránh xóa file mà worker đã có thể sử dụng. Hiện chưa có tiến trình reconciliation xử lý các trường hợp này.
-
-Tính idempotent tồn tại khi metadata còn được giữ. Nếu metadata bị xóa, cùng job có thể được xem như submit mới; script cũng không tự enqueue lại một job đã có fingerprint nếu queue bị mất riêng lẻ.
-
-### 7.3. Truyền KEYS và ARGV cho Lua
-
-```csharp
-ScriptEvaluateAsync(SubmitScript, [jobKey, queueKey], arguments);
-```
-
-```text
-KEYS[1] = Redis key của hash metadata
-KEYS[2] = Redis key của list pending
-
-ARGV[1] = job ID để enqueue
-ARGV[2] = fingerprint
-ARGV[3] = tên field thứ nhất
-ARGV[4] = giá trị field thứ nhất
-ARGV[5] = tên field thứ hai
-ARGV[6] = giá trị field thứ hai
-...
-```
-
-Lua đánh chỉ số từ 1. `KEYS` chứa tên Redis key; `ARGV` chứa tham số dữ liệu, gồm cả tên field bên trong hash.
-
-Dòng ghi hash:
-
-```lua
-redis.call('HSET', KEYS[1], '_SubmissionFingerprint', ARGV[2], unpack(ARGV, 3))
-```
-
-Ví dụ viết tường minh:
-
-```lua
-redis.call(
-    'HSET',
-    'fileconverter:storage:job:<guid>',
-    '_SubmissionFingerprint', 'A1B2...',
-    'OriginalFileName', '"report.docx"',
-    'Status', '0'
-)
-```
-
-`unpack(ARGV, 3)` trải các cặp field/value từ phần tử thứ ba. `HSET` thêm field mới hoặc ghi đè field đã có, không xóa các field khác.
-
-### 7.4. Claim nguyên tử bằng receipt
-
-```text
-Sinh receipt ID mới
-→ LINDEX pending -1 để xem job cuối list
-→ Nếu rỗng: chưa claim, chờ polling
-→ Kiểm tra receipt ID chưa có
-→ HSET receipts[receiptId] = jobId
-→ RPOP pending
-→ Trả ConversionJobClaim(jobId, receiptId)
-```
-
-Việc ghi receipt trước khi bỏ phần tử pending giúp giữ dấu vết delivery trong lần thực thi script bình thường. Tính nguyên tử ngăn hai consumer cùng lấy một phần tử queue, nhưng không ngăn cùng job ID xuất hiện nhiều lần trong queue và không chứng minh conversion chỉ chạy đúng một lần.
-
-Receipt hiện chỉ lưu ánh xạ ID, không có worker owner, thời điểm, lease hoặc heartbeat. Vì vậy claim/ACK hiện là nền tảng theo dõi delivery, chưa phải cơ chế tự phục hồi hoàn chỉnh.
-
-### 7.5. ACK có điều kiện
-
-```lua
-if redis.call('HGET', KEYS[1], ARGV[1]) == ARGV[2] then
-    return redis.call('HDEL', KEYS[1], ARGV[1])
-end
-return 0
-```
-
-`ARGV[1]` là receipt ID, `ARGV[2]` là job ID. Chỉ xóa receipt nếu value khớp job. ACK lặp hoặc ACK sai cặp không xóa receipt khác. Implementation hiện không trả số field bị xóa cho caller.
-
-ACK không xóa metadata hoặc file. Worker chủ động giữ thứ tự **lưu output → lưu trạng thái cuối → ACK** để tránh xác nhận quá sớm.
-
-### 7.6. Giới hạn concurrency bằng các async loop cố định
-
-Worker tạo `MaxConcurrentJobs` loop với `Enumerable.Range`, rồi đợi bằng `Task.WhenAll`. Mỗi loop claim một job và xử lý xong mới claim tiếp.
-
-```text
-Instance có C loop → tối đa C job nằm trong các bước xử lý của worker đó
-R instance, mỗi instance C loop → tối đa R × C job ở các loop
-```
-
-Đây là concurrency bất đồng bộ, không phải tạo C thread chuyên dụng. Cách làm không prefetch cả batch về bộ nhớ. Giới hạn này áp dụng cho từng process, không phải quota toàn cụm.
-
-Nếu có N container, throughput còn phụ thuộc thời gian convert, tài nguyên CPU/RAM, I/O và phân phối request. Chỉ có thể dùng `N / thời gian xử lý trung bình` như ước lượng lý tưởng khi mỗi node chạy một job, tải cân bằng và không có nghẽn khác; báo cáo không coi đó là số đo hiệu năng.
-
-### 7.7. Ghi file nguyên tử bằng tệp tạm và rename
-
-```text
-Resolve đường dẫn trong storage root
-→ Tạo tên tạm cùng thư mục đích
-→ Copy stream vào file tạm bằng I/O async
-→ Đóng handle file tạm
-→ Kiểm tra cancellation
-→ File.Move(temp, final, overwrite: true)
-→ finally xóa file tạm nếu còn
-```
-
-Đặt file tạm cùng thư mục giúp bước publish dùng rename trên cùng filesystem. Khi hủy trong lúc copy, file đích cũ được giữ nguyên và file tạm được dọn trong nhánh `finally` khi process còn hoạt động. Process bị kill đột ngột vẫn có thể để lại file tạm.
-
-Nguyên tử ở đây nói đến việc công bố tên file hoàn chỉnh; code chưa thực hiện giao thức bảo đảm bền vững tuyệt đối khi mất điện hoặc transaction chung với Redis.
-
-`ResolvePath` chuẩn hóa đường dẫn bằng `GetFullPath` rồi kiểm tra nó nằm dưới root. Đây là kiểm tra đường dẫn dạng chuỗi; chưa có cơ chế riêng xử lý symlink/reparse point. Buffer `FileStream` được cấu hình 64 KiB, nhưng không thể suy ra toàn hệ thống chỉ dùng từng đó bộ nhớ: model binding `IFormFile`, multipart, proxy và các request đồng thời có chi phí riêng.
-
-### 7.8. Ánh xạ entity ↔ Redis hash
-
-**Ghi:** reflection lấy public property có getter, bỏ indexer; serialize từng value theo kiểu property thành JSON; tạo `HashEntry(propertyName, jsonValue)`.
-
-**Đọc:** `HGETALL`, tạo object qua constructor không tham số, tìm property có setter kể cả private, deserialize theo kiểu property rồi gán bằng reflection. Field không ánh xạ tới property như `_SubmissionFingerprint` được bỏ qua khi khôi phục entity.
-
-Repository update ghi các field nhưng không xóa field bổ sung, nên fingerprint vẫn còn. Đổi tên/kiểu thuộc tính Domain có thể ảnh hưởng dữ liệu Redis đã lưu; hiện chưa có schema version hoặc migration. Reflection cũng có thể khôi phục trạng thái mà không đi qua `Start/Complete/Fail`, nên dữ liệu lưu trữ cần được xem là một ranh giới kiểm tra riêng.
-
-### 7.9. HTTP conversion, retry và deadline
-
-Converter gửi multipart field `files` tới `/forms/libreoffice/convert`, dùng `ResponseHeadersRead` để nhận stream body rồi chuyển cho callback lưu output.
-
-| Tình huống | Xử lý hiện tại |
-| --- | --- |
-| Input hỗ trợ seek | Có thể thử lại tới `MaxAttempts`; reset về vị trí ban đầu trước mỗi attempt |
-| Input không seek | Chỉ một attempt |
-| HTTP từ 500 trở lên, còn attempt | Dispose response, chờ delay cố định rồi gửi lại |
-| HttpRequestException, còn attempt | Chờ rồi gửi lại |
-| TaskCanceledException do timeout attempt, token tổng chưa hủy, còn attempt | Chờ rồi gửi lại |
-| HTTP 4xx hoặc response lỗi cuối | `EnsureSuccessStatusCode` gây lỗi; worker đánh dấu Failed |
-| Lỗi đọc PDF body hoặc callback lưu output | Không nằm trong vòng retry gửi request; lỗi chuyển về worker |
-| Hết deadline tổng | Chuyển thành TimeoutException khi token của caller chưa hủy |
-
-Delay retry là cố định, đơn vị phút; chưa có exponential backoff hoặc jitter. `LeaveOpenReadStream` giúp dispose multipart content mà không đóng input gốc giữa các attempt.
-
-`HttpClient.Timeout` giới hạn phần `SendAsync` đến lúc nhận headers khi dùng `ResponseHeadersRead`; deadline token tổng bao trùm cả retry, delay, đọc PDF và callback lưu file. Các timeout của nginx/Gotenberg là lớp cấu hình khác và cần được đối chiếu khi vận hành.
-
-Timeout/lỗi mạng phía caller không chứng minh engine đã dừng. Khi tăng số attempt, có thể gửi conversion mới trong lúc attempt trước chưa rõ kết quả. Mặc định `MaxAttempts = 1` chỉ là mặc định lớp options, không khẳng định giá trị runtime từ môi trường.
-
-### 7.10. Ranh giới cancellation
-
-| Giai đoạn | Hành vi |
-| --- | --- |
-| Trước hoặc trong lúc lưu input | Tôn trọng token của request; atomic save dọn file tạm khi có thể |
-| Sau lưu input nhưng trước submit | Kiểm tra token; nếu hủy thì thử xóa input |
-| Khi đã bắt đầu submit từ upload handler | Dùng `CancellationToken.None`, đợi thao tác Redis thay vì bỏ ngang |
-| Submit lỗi, chưa rõ Redis đã nhận chưa | Giữ input, log lỗi để phục vụ reconciliation |
-| Sau khi job được tiếp nhận | Worker dùng token vòng đời host; client disconnect không hủy job đã nhận |
-| Claim/ACK đã phát lệnh Redis | Đợi lệnh hoàn tất; kiểm tra cancellation trước khi phát lệnh |
-| Host dừng trong conversion | Hủy I/O theo token; có thể để Processing và receipt cần phục hồi |
-
-Repository metadata vẫn có các thao tác dùng `WaitAsync(token)`; vì vậy không phải mọi mutation trong dự án đều có cùng chính sách cancellation như submit/claim/ACK.
-
-## 8. Hạ tầng Redis, nginx và Gotenberg
-
-### 8.1. Sơ đồ runtime
+### 1.2. Sơ đồ runtime
 
 ```mermaid
 flowchart LR
     C[Client] --> API[ASP.NET Core API]
-    API --> APP[Application handlers]
-    APP --> R[(Redis metadata và pending)]
-    APP --> S[(Storage input và output)]
-    W[Hosted worker cùng API process] --> R
+    subgraph HOST[Ứng dụng .NET]
+        API --> APP[Application handlers]
+        W[ConversionJobWorker]
+        CL[CleanupWorker]
+        RE[RecoveryWorker]
+    end
+    APP --> R[(Redis)]
+    APP --> S[(Storage)]
+    W --> R
     W --> S
-    W --> N[nginx khi BaseUrl trỏ cụm]
-    N --> G[Gotenberg replicas / LibreOffice]
+    CL --> R
+    CL --> S
+    RE --> R
+    W --> N[nginx]
+    N --> G[Gotenberg / LibreOffice replicas]
 ```
 
-Converter chỉ biết `GOTENBERG:BaseUrl`; có thể trỏ tới một Gotenberg hoặc nginx. Cấu hình compose không tự quyết định BaseUrl đang được ứng dụng sử dụng.
+Ba worker chạy cùng process với API. Dừng API thì các worker trong instance đó cũng dừng. Gotenberg là tiến trình/container riêng; dừng .NET không đồng nghĩa Gotenberg đã kết thúc conversion đang chạy.
 
-### 8.2. Redis
+## 2. Cấu trúc thư mục
 
-`Redis/docker-compose.yml` khai báo Redis image `7.4-alpine3.21`, cổng host 6379, volume `/data` và bật AOF. RedisInsight phục vụ quan sát dữ liệu qua cổng 5540.
+```text
+FileConverter/
+├── FileConverterService/
+│   ├── FileConverterService.slnx
+│   ├── FileConverterService.Domain/
+│   │   ├── Entities/
+│   │   ├── Enums/
 
-AOF/volume là cấu hình persistence; không thay thế recovery job trong application hoặc chứng minh không mất dữ liệu ở mọi kiểu sự cố. Chưa có mô hình Redis Cluster trong compose này. Nếu chuyển sang Redis Cluster, các key trong cùng Lua script phải chung hash slot; tên mặc định hiện chưa dùng hash tag để bảo đảm điều đó.
+│   ├── FileConverterService.Application/
+│   │   ├── BusinessExceptions/
+│   │   ├── Common/Behaviors/
+│   │   ├── Constants/
+│   │   ├── Converters/
+│   │   ├── HelperServices/Storage/
+│   │   ├── Jobs/
+│   │   ├── Readiness/
+│   │   ├── Repositories/
+│   │   ├── UseCases/
+│   │   │   ├── ConvertToPDF/
+│   │   │   ├── GetJob/
+│   │   │   ├── GetFileOfJob/
+│   │   │   └── DeleteResourceRelatedToJob/
 
-### 8.3. Môi trường Gotenberg đơn
+│   ├── FileConverterService.Infrastructure/
+│   │   ├── Converters/
+│   │   ├── Extensions/
+│   │   ├── HelperServices/Storage/
+│   │   ├── Options/
+│   │   ├── Readiness/
+│   │   ├── Repositories/
+│   │   ├── Workers/
 
-`LibreOffice/Gotenberg/docker-compose.yml` khai báo một container, publish cổng 3000, `--api-timeout=10s`, `--libreoffice-restart-after=1`, health check `/health`, giới hạn cấu hình 0.25 CPU và 512 MiB RAM. Đây là môi trường thử riêng, không đồng nhất với cấu hình cụm.
-
-### 8.4. Cụm Gotenberg qua nginx
-
-Compose cụm khai báo:
-
-| Thành phần | Cấu hình trong repository |
-| --- | --- |
-| nginx | `nginx:1.28-alpine`, host 80 → container 3000 |
-| Gotenberg | `gotenberg/gotenberg:8` |
-| Replica mong muốn | 20 trong `deploy.replicas` |
-| API timeout engine | 180 giây |
-| LibreOffice restart | Cấu hình restart sau một conversion |
-| Tài nguyên mỗi replica | Giới hạn 0.25 CPU, 512m bộ nhớ |
-
-Đây là giá trị khai báo trong compose. Image tag major `8` chưa cố định patch/digest; báo cáo không suy ra phiên bản LibreOffice thực tế từ tag này.
-
-### 8.5. Thuật toán và chính sách proxy
-
-| Cấu hình nginx | Vai trò |
-| --- | --- |
-| `least_conn` | Chọn upstream theo số kết nối đang hoạt động |
-| `zone gotenberg_pool 64k` | Shared state upstream giữa nginx worker process trong instance |
-| Docker DNS resolver, `resolve` | Cập nhật địa chỉ upstream theo DNS |
-| `max_fails=1 fail_timeout=10s` | Chính sách lỗi thụ động của upstream |
-| `client_max_body_size 100m` | Giới hạn body trên nginx, không phải validation toàn bộ API gateway |
-| `proxy_request_buffering on` | Buffer request body trước khi chuyển upstream |
-| `proxy_buffering off` | Không buffer response theo cơ chế proxy buffering thông thường |
-| `proxy_ignore_client_abort on` | Không chủ động bỏ upstream chỉ vì client ngắt kết nối |
-| `proxy_next_upstream off` | Không tự replay conversion sang upstream khác |
-| Proxy connect/send/read timeout | 300 giây theo cấu hình |
-| `/nginx-health` | Liveness của nginx, không chứng minh Gotenberg rảnh |
-
-`least_conn` phân phối request theo số kết nối đang hoạt động tới các upstream. Giới hạn concurrency của worker được cấu hình riêng bằng `WORKER:MaxConcurrentJobs`.
-
-Việc nginx giữ upstream khi client abort cũng không xác nhận conversion đã dừng khi timeout hoặc nginx restart. Retry trong converter là lớp riêng, vẫn có thể phát request mới dù nginx đã tắt upstream replay.
-
-## 9. Xử lý lỗi và các tình huống sự cố
-
-| Điểm xảy ra sự cố | Trạng thái có thể còn lại | Hành vi và giới hạn hiện tại |
-| --- | --- | --- |
-| Copy input lỗi/hủy | File tạm | `finally` thử dọn; kill process có thể để lại temp |
-| Input đã lưu, process chết trước submit | Input không có metadata | Chưa có orphan cleanup |
-| Redis submit thành công nhưng mất phản hồi | Metadata/queue có thể đã có, input còn | Caller có thể ghi nhận thất bại; chưa có reconciliation trả lại job ID |
-| Worker chết sau claim | Receipt còn, pending đã mất phần tử | Không có automatic requeue |
-| Worker chết sau lưu Processing | Metadata Processing, receipt còn | Job có thể treo vô thời hạn |
-| Conversion lỗi khi host vẫn chạy | Failed được ghi nếu Redis hoạt động | Worker ACK sau lưu trạng thái |
-| Timeout nhưng engine còn chạy | Metadata có thể Failed, engine chưa rõ kết quả | Retry chưa có phối hợp trạng thái attempt/node |
-| PDF lưu xong nhưng lưu Completed lỗi | PDF tồn tại, metadata có thể Processing | Chưa có đối chiếu output để phục hồi |
-| Lưu trạng thái cuối xong nhưng ACK lỗi | Completed/Failed và receipt còn | Worker giữ receipt; chưa có quét tự động receipt tồn đọng |
-| Xóa dở dang | Một phần file/metadata còn | Giữ metadata và member cleanup để thử lại; xóa file trước rồi dọn Redis bằng Lua |
-| API/worker chạy trên nhiều host | Redis chung nhưng file có thể chỉ ở một host | Cần storage dùng chung hoặc cơ chế truy cập file phù hợp |
-
-`RedisJobConversionRepository.UpdateAsync` kiểm tra key tồn tại rồi ghi ở hai thao tác riêng. Chưa có version/owner/CAS cho chuyển trạng thái, nên không bảo vệ trước cạnh tranh ghi nếu sau này có redelivery/recovery hoặc duplicate delivery.
-
-Middleware và trạng thái Failed hiện có thể trả/lưu `exception.Message` từ lỗi kỹ thuật. Cần cân nhắc thông báo công khai ổn định và giữ chi tiết nội bộ trong log khi hoàn thiện vận hành.
-
-## 10. Kiểm thử và phạm vi kiểm chứng
-
-### 10.1. Kiểm tra .NET
-
-Các project kiểm thử .NET đã được gỡ. Có thể kiểm tra build bằng lệnh:
-
-```powershell
-dotnet build FileConverterService/FileConverterService.slnx
+│   └── FileConverterService.Api/
+│       ├── ApiResponseModels/
+│       ├── Constants/
+│       ├── Controllers/
+│       ├── Middlewares/
+│       ├── Properties/
+│       ├── Registrations/
+│       ├── Program.cs
+│       ├── appsettings.json
+│       ├── appsettings.Development.json
+│       └── .env
+├── LibreOffice/
+│   ├── Gotenberg/docker-compose.yml
+│   └── GotenbergCluster/
+│       ├── docker-compose.yml
+│       └── nginx.conf
+├── Redis/docker-compose.yml
+├── .agents/skills/
+├── docs/
+└── README.md
 ```
 
-### 10.2. Các script Node.js thử nghiệm
+Solution `.slnx` tập hợp bốn project dịch vụ. Mỗi `.csproj` khai báo framework, package và project reference. `bin/`, `obj/` chứa dữ liệu sinh khi build. `Storage/` dưới content root của Api là thư mục runtime.
 
-| Script | Mục đích/cách hoạt động đang có |
-| --- | --- |
-| `Gotenberg/test-cancel.cjs` | Gọi Gotenberg đơn; có tùy chọn abort nhưng hiện `CANCEL_AFTER_MS = null` |
-| `Gotenberg/test-timeout.cjs` | Chỉ in hướng dẫn đổi timeout và chạy lại script cancel; chưa tự thực hiện kiểm thử |
-| `GotenbergCluster/test-client-abort.cjs` | Gọi nginx trực tiếp, có request abort sau 5 giây và request gửi sau 10 giây |
-| `GotenbergCluster/test-upstream-timeout.cjs` | Gọi nginx trực tiếp với file dài/ngắn; hướng dẫn đổi engine timeout về 20 giây trước khi chạy |
-| `GotenbergCluster/test-capacity.cjs` | Gửi 25 request upload đồng thời vào API `/api/conversions` |
+`LibreOffice/` chứa cấu hình engine và cụm proxy; `Redis/` chứa cấu hình Redis/RedisInsight. `.agents/skills/` chứa hướng dẫn phát triển, không tham gia runtime. `docs/` chứa tài liệu dự án; `README.md` là điểm giới thiệu repository.
 
-**Giới hạn quan trọng của `test-capacity.cjs`:** API upload trả JSON 202, nhưng script đọc response bằng `arrayBuffer()` và ghi thành `.pdf`. File có phần mở rộng PDF trong trường hợp này thực chất là body JSON tiếp nhận, không phải kết quả conversion. Thời gian script đo chủ yếu là bước upload/acceptance, chưa phải thời gian tạo PDF của cả batch.
+## 3. Project Domain
 
-Để kiểm thử end-to-end cần: parse JSON → lấy job ID → polling tới Completed/Failed có deadline → tải `/job/{id}/file` → kiểm tra status/content và đối chiếu log thực thi từng node. Đo thời gian response upload hoặc số file đuôi `.pdf` không chứng minh được concurrency engine.
+### 3.1. Entities
 
-Các script dùng đường dẫn tương đối và có thao tác xóa thư mục output trước khi chạy. Báo cáo chỉ phân tích mã, không chạy các script hạ tầng này. Nhãn thời gian trong một số script ghi `ms` nhưng biểu thức chia 1000 thực tế cho đơn vị giây.
-
-### 10.3. Kết quả kiểm chứng khi lập báo cáo
-
-- Build solution: thành công, 0 warning và 0 error.
-
-## 11. Đánh giá và hướng hoàn thiện
-
-### 11.1. Các điểm đã có nền tảng tốt
-
-- Phân tầng và interface tách nghiệp vụ khỏi Redis, HTTP và filesystem.
-- Use case có input/output/validator riêng, thuận tiện theo dõi tính năng.
-- Submit metadata và enqueue được gom trong Lua, có xử lý submit lặp và lỗi LPUSH.
-- Claim có receipt; ACK kiểm tra đúng cặp receipt/job và diễn ra sau persist trạng thái cuối.
-- Worker giới hạn concurrency trong từng instance, không lấy trước một batch lớn.
-- File input/output được publish qua file tạm; stream có cơ chế quản lý vòng đời rõ ở controller/converter.
-- Có tổng deadline cho cả nhận PDF và lưu output, thay vì chỉ timeout chờ response headers.
-
-### 11.2. Các hạng mục cần hoàn thiện
-
-| Ưu tiên | Hạng mục | Hướng triển khai đề xuất, chưa được thực hiện trong báo cáo |
+| Class/record | File | Trách nhiệm |
 | --- | --- | --- |
-| Cao | Recovery job/receipt | Thêm owner, attempt, thời điểm, heartbeat; tiến trình reconciliation phối hợp với trạng thái thực thi engine |
-| Cao | Ghi trạng thái có điều kiện | CAS theo state/version/attempt/owner; chặn attempt cũ ghi kết quả của attempt mới |
-| Cao | Storage khi scale | Shared volume hoặc implementation storage chung mà mọi worker truy cập được |
-| Trung bình | Validation file | Chưa có kiểm tra size/tổng request, file rỗng, extension và nội dung thực |
-| Trung bình | Hợp đồng upload | Trả kết quả từng file, phân biệt rejected/accepted/unknown, xử lý trường hợp không file nào được nhận |
-| Trung bình | Cleanup mở rộng | Đã có retention/retry cho job kết thúc; còn cần dọn orphan/temp và phối hợp job bị treo |
-| Đã triển khai | Readiness | Redis PING, probe file input/output, Gotenberg /health; deadline cấu hình qua READINESS__TimeoutSeconds |
-| Trung bình | Quan sát hệ thống | Pending depth, receipt age, thời gian queue/convert/save, lỗi và tải xử lý của cụm |
-| Trung bình | Kiểm thử | Redis integration cho Lua, worker lifecycle/failure, download/delete, E2E conversion và kiểm thử tải |
-| Thấp | Đồng bộ tài liệu | README, route hiện tại, cây thư mục, tên lớp và phân biệt thiết kế tương lai |
+| ConversionJob | Entities/ConversionJob.cs | Entity một job: thông tin file, storage key, trạng thái, thời điểm và lỗi |
+| ConversionJobClaim | Entities/ConversionJobClaim.cs | Record một lần giao job: JobId, ReceiptId và LastHeartbeatAt |
 
-### 11.3. Chênh lệch với tài liệu thiết kế trước đây
+Các thuộc tính của ConversionJob:
 
-| Nội dung tài liệu cũ | Mã nguồn/cấu hình hiện tại |
+| Thuộc tính | Ý nghĩa |
 | --- | --- |
-| Route `/api/v1/conversions` | `/api/conversions`, có đoạn `/job/{jobId}` |
-| Sync conversion/ký tức thì | Chưa có endpoint/use case |
-| Cleanup TTL 60 phút | Đã có CleanupWorker; mặc định hiện tại 10 phút, cấu hình qua CLEANUP |
-| Bốn worker cố định | Số loop theo `WORKER:MaxConcurrentJobs` |
-| Bốn container engine | Compose cụm khai báo 20 replica; chưa xác nhận runtime |
-| RPOPLPUSH và tự khôi phục khi restart | Lua claim vào receipt hash; chưa có recovery |
-| Request streaming không buffer toàn tuyến | `IFormFile` ở API và `proxy_request_buffering on` ở nginx |
-| Nhận toàn bộ Office | Validator hiện chỉ nhận MIME DOC/DOCX |
+| Id | GUID job |
+| OriginalFileName | Tên file đầu vào |
+| ContentType | MIME được gửi kèm file |
+| InputStorageKey | Đường dẫn tương đối tới input |
+| OutputStorageKey | Đường dẫn tương đối tới PDF khi hoàn tất |
+| Status | ConversionJobStatus |
+| CreatedAt | Thời điểm tạo UTC |
+| ProccessedAt | Thời điểm bắt đầu UTC; giữ cách viết hiện có trong entity |
+| CompletedAt | Thời điểm hoàn thành, thất bại hoặc ghi nhận gián đoạn |
+| Error | Thông báo lỗi/gián đoạn |
 
-Các số RAM, thời gian chuyển đổi hoặc bảo đảm không mất job trong tài liệu cũ chưa được xác nhận bằng kết quả kiểm thử của lần lập báo cáo này.
-
-## 12. Bản đồ mã nguồn tham khảo
-
-Các liên kết dưới đây trỏ tới mã nguồn tương đối từ thư mục `docs`:
-
-| Nội dung cần đọc | File |
+| Phương thức | Hành vi |
 | --- | --- |
-| Entry point | [Program.cs](../FileConverterService/FileConverterService.Api/Program.cs) |
-| API chuyển đổi | [ConversionsController.cs](../FileConverterService/FileConverterService.Api/Controllers/ConversionsController.cs) |
-| Health/ready | [CheckController.cs](../FileConverterService/FileConverterService.Api/Controllers/CheckController.cs) |
-| Exception middleware | [GlobalExceptionHandlerMiddleware.cs](../FileConverterService/FileConverterService.Api/Middlewares/GlobalExceptionHandlerMiddleware.cs) |
-| Validation pipeline | [ValidationBehavior.cs](../FileConverterService/FileConverterService.Application/Common/Behaviors/ValidationBehavior.cs) |
-| Tiếp nhận upload | [ConverToPDF_UCHandler.cs](../FileConverterService/FileConverterService.Application/UseCases/ConvertToPDF/ConverToPDF_UCHandler.cs) |
-| Quy tắc file | [ConverToPDF_UCInputValidator.cs](../FileConverterService/FileConverterService.Application/UseCases/ConvertToPDF/ConverToPDF_UCInputValidator.cs) |
-| Tra cứu | [GetJob_UCHandler.cs](../FileConverterService/FileConverterService.Application/UseCases/GetJob/GetJob_UCHandler.cs) |
-| Download | [GetFileOfJob_UCHandler.cs](../FileConverterService/FileConverterService.Application/UseCases/GetFileOfJob/GetFileOfJob_UCHandler.cs) |
-| Cleanup thủ công | [DeleteResourceRelatedToJob_UCHandler.cs](../FileConverterService/FileConverterService.Application/UseCases/DeleteResourceRelatedToJob/DeleteResourceRelatedToJob_UCHandler.cs) |
-| Entity và claim | [ConversionJob.cs](../FileConverterService/FileConverterService.Domain/Entities/ConversionJob.cs), [ConversionJobClaim.cs](../FileConverterService/FileConverterService.Domain/Entities/ConversionJobClaim.cs) |
-| Hợp đồng atomic operations | [IConversionJobAtomicOperations.cs](../FileConverterService/FileConverterService.Application/Jobs/IConversionJobAtomicOperations.cs) |
-| Thuật toán Lua | [RedisConversionJobAtomicOperations.cs](../FileConverterService/FileConverterService.Infrastructure/AtomicOperations/RedisConversionJobAtomicOperations.cs) |
-| Redis metadata | [RedisJobConversionRepository.cs](../FileConverterService/FileConverterService.Infrastructure/Repositories/RedisJobConversionRepository.cs) |
-| Redis options | [RedisOptions.cs](../FileConverterService/FileConverterService.Infrastructure/Options/RedisOptions.cs) |
-| Worker | [ConversionJobWorker.cs](../FileConverterService/FileConverterService.Infrastructure/Workers/ConversionJobWorker.cs) |
-| Retry/deadline | [GotenbergDocumentConverter.cs](../FileConverterService/FileConverterService.Infrastructure/Converters/GotenbergDocumentConverter.cs) |
-| File storage | [LocalFileManagerService.cs](../FileConverterService/FileConverterService.Infrastructure/HelperServices/Storage/LocalFileManagerService.cs) |
-| Cụm engine | [docker-compose.yml](../LibreOffice/GotenbergCluster/docker-compose.yml), [nginx.conf](../LibreOffice/GotenbergCluster/nginx.conf) |
-| Redis deployment | [docker-compose.yml](../Redis/docker-compose.yml) |
-| Script upload đồng thời | [test-capacity.cjs](../LibreOffice/GotenbergCluster/test-capacity.cjs) |
-| Luồng thiết kế cũ để đối chiếu | [all-flow.md](../.agents/skills/api-service-flow-logic-skills/references/flows/all-flow.md) |
+| Constructor có tham số | Tạo GUID, CreatedAt và trạng thái Pending |
+| Start() | Pending → Processing; gán ProccessedAt, xóa lỗi |
+| Complete(outputStorageKey) | Processing → Completed; ghi output key và CompletedAt |
+| Fail(error) | Processing → Failed; ghi Error và CompletedAt |
+| Interrupt(error) | Processing → Interrupted; ghi Error và CompletedAt |
+| EnsureStatus(expected) | Kiểm tra trạng thái trước khi thay đổi object |
 
-## 13. Cleanup theo thời gian lưu giữ
+Các phương thức trên sửa object trong RAM; không tự ghi Redis. Worker gọi atomic operation để lưu trạng thái có điều kiện. Constructor không tham số phục vụ khôi phục object từ metadata.
 
-Chi tiết implementation, cấu hình, Sorted Set, retry và phạm vi kiểm chứng nằm tại [CLEANUP.md](CLEANUP.md). Mặc định giữ tài nguyên 10 phút sau CompletedAt; CleanupWorker đọc tối đa 100 job tới hạn từ Sorted Set và chờ 30 giây sau mỗi batch. DELETE thủ công vẫn chỉ yêu cầu Completed/Failed và không đợi hết hạn.
+`ConversionJobClaim` là record có positional constructor nhận JobId, ReceiptId và LastHeartbeatAt (mặc định nếu chưa cung cấp). Record không khai báo method nghiệp vụ; dữ liệu này được truyền giữa worker và các thao tác claim, heartbeat, ACK, recovery. ReceiptId nhận diện một lần giao job, còn LastHeartbeatAt là snapshot nhịp sống tại thời điểm đọc, không tự cập nhật khi Redis thay đổi.
 
-## 14. Readiness
+### 3.2. Enums
 
-`GET /check/ready` kiểm tra đồng thời Redis PING, ghi nguyên tử/đọc/xóa file thử trong input và output, và HTTP GET /health trên GOTENBERG:BaseUrl. Thành công trả ApiSuccessResponse chứa checks và ready; lỗi dependency trả 503 ApiErrorResponse với tên dependency lỗi, không lộ exception kỹ thuật. READINESS__TimeoutSeconds trong .env mặc định 5 giây. Deadline hỗ trợ cancellation cho I/O bất đồng bộ; thao tác filesystem đồng bộ và dọn file probe không phải timeout cưỡng bức. Nếu BaseUrl trỏ nginx, health chỉ phản ánh upstream được chọn, chưa xác nhận mọi replica. Health không chứng minh engine còn capacity. /check/health vẫn là liveness đơn giản. Kiểm thử dùng Redis thật, storage thật và HTTP handler giả lập cho Gotenberg; đã kiểm tra 200/503, lỗi dependency, timeout và cancellation.
+`Enums/ConversionJobStatus.cs`:
 
+| Giá trị | Tên | Ý nghĩa |
+| --- | --- | --- |
+| 0 | Pending | Đang chờ xử lý |
+| 1 | Processing | Gateway đang theo dõi quá trình conversion |
+| 2 | Completed | PDF đã lưu và trạng thái hoàn tất đã ghi |
+| 3 | Failed | Gateway ghi nhận thất bại |
+| 4 | Interrupted | Mất heartbeat quá hạn khi Processing, kết quả chưa rõ |
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Processing: Start và MarkProcessingAsync
+    Processing --> Completed: Complete và SaveTerminalAsync
+    Processing --> Failed: Fail và SaveTerminalAsync
+    Processing --> Interrupted: Recovery phát hiện heartbeat quá hạn
+```
+
+## 4. Project Application — điều phối nghiệp vụ
+
+Application định nghĩa các use case và hợp đồng dịch vụ; không phụ thuộc Redis, filesystem hay Gotenberg cụ thể. Mỗi nhóm dưới đây nêu class, công dụng chung rồi các method do class khai báo. DTO/options chỉ mang dữ liệu được mô tả bằng thuộc tính; không liệt kê các getter/setter hay method tự sinh của record.
+
+### 4.1. Folder UseCases/ConvertToPDF
+
+#### ConverToPDF_UCInput
+
+Request MediatR chứa `Files`, danh sách file cần tiếp nhận. Không khai báo method nghiệp vụ.
+
+#### FileParams
+
+Nằm cùng file với input, chứa `FileName`, MIME `Type` và stream `Content`. Giúp Application nhận dữ liệu file mà không phụ thuộc `IFormFile` của ASP.NET. Không khai báo method.
+
+#### ConverToPDF_UCInputValidator
+
+Kiểm tra điều kiện tiếp nhận trước khi handler chạy.
+
+| Method | Công dụng |
+| --- | --- |
+| Constructor | Khai báo rule: 1–5 file; từng file khác null; tên không rỗng; đuôi `.doc`/`.docx` không phân biệt hoa thường; MIME tương ứng; stream khác null, đọc và seek được; dung lượng lớn hơn 0 và không quá 20 MiB/file. |
+
+Việc thực thi các rule do FluentValidation đảm nhiệm. Giới hạn dung lượng đang hardcode; validator chưa phân tích cấu trúc nội dung Word. MIME là thông tin client gửi lên.
+
+#### ConverToPDF_UCHandler
+
+Tiếp nhận upload và tạo job Pending; không thực hiện conversion ngay trong request.
+
+| Method | Công dụng |
+| --- | --- |
+| Constructor | Nhận dịch vụ file, atomic operations và logger qua DI. |
+| Handle(input, cancellationToken) | Tạo task riêng cho mỗi file; lấy tên file an toàn, tạo input key riêng và entity; lưu input nguyên tử rồi gọi `SubmitAsync` để ghi metadata và enqueue. Chờ các task, tổng hợp JobId thành công; lỗi từng file được log để các file khác vẫn có thể được nhận. Nếu request bị hủy trước submit, cố xóa input đã lưu. Khi đã gửi thao tác submit Redis, chờ kết quả bằng token không bị hủy theo request để không bỏ chờ một thao tác có thể đã ghi. |
+
+#### ConverToPDF_UCOutput
+
+Mang `TotalFile`, `SuccessfulUploadedFile`, `JobIds`; không khai báo method. Kết quả phản ánh upload được tiếp nhận, không phải số PDF đã chuyển thành công.
+
+### 4.2. Folder UseCases/GetJob
+
+#### GetJob_UCInput
+
+Request chứa `JobId` dạng chuỗi; không khai báo method.
+
+#### GetJob_UCInputValidator
+
+Constructor khai báo rule JobId parse được thành GUID và khác `Guid.Empty`; các rule chạy trước handler.
+
+#### GetJob_UCHandler
+
+Đọc thông tin tiến độ một job.
+
+| Method | Công dụng |
+| --- | --- |
+| Constructor | Nhận repository metadata. |
+| Handle(input, cancellationToken) | Parse JobId, đọc metadata; không có thì ném `NotFoundException`. Ánh xạ entity sang output, xuất trạng thái thành chuỗi; không cập nhật trạng thái và không đọc file. |
+
+#### GetJob_UCOutput
+
+Chứa JobId, OriginalFileName, Status, CreatedAt, ProcessedAt, CompletedAt, Error. `ProcessedAt` lấy từ thuộc tính `ProccessedAt` trong entity. Không khai báo method.
+
+### 4.3. Folder UseCases/GetFileOfJob
+
+#### GetFileOfJob_UCInput
+
+Request chứa JobId; không khai báo method.
+
+#### GetFileOfJob_UCInputValidator
+
+Constructor khai báo rule GUID hợp lệ và khác rỗng.
+
+#### GetFileOfJob_UCHandler
+
+Chuẩn bị stream PDF để API trả về.
+
+| Method | Công dụng |
+| --- | --- |
+| Constructor | Nhận repository và dịch vụ file. |
+| Handle(input, cancellationToken) | Đọc job hoặc trả lỗi 404; yêu cầu Completed, nếu không trả lỗi 409. Kiểm tra output key, mở file và tạo tên tải xuống có đuôi PDF. File/thư mục không còn được chuyển thành lỗi nghiệp vụ 404. Trả stream cho HTTP response quản lý vòng đời. |
+
+#### GetFileOfJob_UCOutput
+
+Chứa stream `Content`, `FileName`, `ContentType`; không khai báo method. Tải thành công không tự xóa job/file.
+
+### 4.4. Folder UseCases/DeleteResourceRelatedToJob
+
+#### DeleteResourceRelatedToJob_UCInput
+
+Request chứa JobId; không khai báo method.
+
+#### DeleteResourceRelatedToJob_UCInputValidator
+
+Constructor khai báo rule GUID hợp lệ và khác rỗng.
+
+#### DeleteResourceRelatedToJob_UCHandler
+
+Chuyển yêu cầu DELETE thủ công sang dịch vụ dọn tài nguyên dùng chung.
+
+| Method | Công dụng |
+| --- | --- |
+| Constructor | Nhận `IJobCleanupService`. |
+| Handle(input, cancellationToken) | Parse JobId, gọi `ExecuteAsync` ở chế độ thủ công; thành công trả JobId và Success. Các lỗi không tìm thấy hoặc trạng thái chưa cho xóa được đưa lên middleware. |
+
+#### DeleteResourceRelatedToJob_UCOutput
+
+Chứa JobId và Success; không khai báo method.
+
+### 4.5. Folder Jobs
+
+#### IJobCleanupService
+
+Hợp đồng dọn tài nguyên một job. Method `ExecuteAsync(jobId, automatic, cancellationToken)` trả bool: true khi đã dọn job; false ở các nhánh tự động không dọn được job hoặc metadata đã mất.
+
+#### JobCleanupService
+
+Tập trung điều kiện xóa và thứ tự xóa để API DELETE và background cleanup dùng chung.
+
+| Method | Công dụng |
+| --- | --- |
+| Constructor | Nhận repository, dịch vụ file, lịch cleanup và logger. |
+| ExecuteAsync(jobId, automatic = false, cancellationToken) | Đọc metadata và kiểm tra ID khớp. Thủ công chỉ cho Completed/Failed; tự động cho thêm Interrupted. Job không còn: thủ công ném 404, tự động xóa member cleanup còn sót rồi trả false. Job chưa đủ điều kiện: thủ công ném 409, tự động trả false. Xóa input và PDF, chờ cả hai hoàn tất rồi mới xóa metadata/member bằng schedule. File đã thiếu không cản dọn; exception xóa file giữ metadata và lịch để retry. |
+
+PDF dự phòng dùng key `output/{jobId:N}.pdf` nếu metadata chưa có OutputStorageKey. Không áp dụng lại phép trừ retention tại đây; worker đã chọn job theo score đến hạn.
+
+### 4.6. Folder Repositories — các interface
+
+#### IJobConversionRepository
+
+Hợp đồng CRUD metadata, không quản lý file hay queue.
+
+| Method | Công dụng |
+| --- | --- |
+| AddAsync | Lưu metadata một entity. |
+| GetByIdAsync | Đọc entity theo JobId; có thể trả null. |
+| UpdateAsync | Cập nhật metadata đã có. |
+| DeleteAsync | Xóa metadata; không tự xóa file hoặc lịch cleanup. |
+
+#### IConversionJobAtomicOperations
+
+Hợp đồng thao tác có điều kiện giữa metadata, queue, receipt và lịch cleanup.
+
+| Method | Công dụng |
+| --- | --- |
+| SubmitAsync | Tiếp nhận job Pending và đưa vào queue, chống submit lặp cùng JobId/metadata. |
+| ClaimAsync | Lấy một job khỏi queue và tạo receipt của lần giao đó. |
+| MarkProcessingAsync | Chỉ ghi Processing khi receipt hợp lệ và metadata còn Pending. |
+| SaveTerminalAsync | Lưu Completed/Failed và lịch cleanup khi worker còn quyền theo receipt. |
+| HeartbeatAsync | Cập nhật nhịp sống receipt; trả false nếu receipt không còn hợp lệ. |
+| AcknowledgeAsync | Xác nhận xử lý xong bằng cách xóa receipt phù hợp. |
+| ScanReceiptsAsync | Duyệt receipt thành luồng bất đồng bộ để recovery xem xét. |
+| TryRecoverAsync | Kiểm tra lại receipt quá hạn và thực hiện nhánh recovery tương ứng. |
+
+#### IJobCleanupSchedule
+
+Hợp đồng truy vấn và điều chỉnh lịch cleanup.
+
+| Method | Công dụng |
+| --- | --- |
+| GetDueJobIdsAsync(now, count, token) | Đọc tối đa count JobId đến hạn; chưa xóa hoặc chiếm quyền xử lý các member. |
+| DeleteJobAsync | Xóa metadata và member cleanup trong cùng thao tác Redis. |
+| DeferAsync | Dời lịch retry của member đang tồn tại về sau. |
+
+### 4.7. Folder Converters và HelperServices/Storage
+
+#### IDocumentConverter
+
+Tách nghiệp vụ khỏi engine cụ thể. `ConvertToPdfAsync(jobId, input, fileName, callBack, token)` gửi input để chuyển đổi, cung cấp stream PDF cho callback lưu kết quả; hỗ trợ hủy tác vụ.
+
+#### IFileManagerService
+
+Tách use case khỏi cách lưu file cụ thể.
+
+| Method | Công dụng |
+| --- | --- |
+| SaveFileAsync | Lưu stream với key chỉ định hoặc key sinh mới; trả key. |
+| SaveFileAtomicallyAsync | Ghi file tạm rồi thay file đích để tránh lộ file đang ghi dở. |
+| ReadFileAsync | Mở stream đọc; bên nhận chịu trách nhiệm dispose. |
+| DeleteFileAsync | Xóa file; trả false nếu không có file. |
+| ExistsAsync | Kiểm tra file theo storage key. |
+
+### 4.8. Folder Readiness
+
+#### IReadinessService
+
+`CheckAsync(token)` kiểm tra khả năng phục vụ thực tế và trả `ReadinessResult`.
+
+#### ReadinessResult
+
+Record chứa dictionary `Checks` ánh xạ dependency sang bool. Thuộc tính tính toán `Ready` true khi tất cả mục đạt; không khai báo method nghiệp vụ riêng.
+
+### 4.9. Folder Common/Behaviors
+
+#### ValidationBehavior<TRequest,TResponse>
+
+Pipeline MediatR chạy validation thống nhất trước use case.
+
+| Method | Công dụng |
+| --- | --- |
+| Constructor | Nhận toàn bộ validator phù hợp request. |
+| Handle(request, next, cancellationToken) | Chạy validator bất đồng bộ, gom lỗi theo property; có lỗi thì ném BadRequestException, hợp lệ thì gọi next để chuyển tới handler. |
+
+### 4.10. Folder BusinessExceptions
+
+#### BusinessException
+
+Lớp cơ sở cho lỗi nghiệp vụ, mang Message, Code và tập Errors.
+
+| Method/thành phần | Công dụng |
+| --- | --- |
+| Constructor | Nhận thông báo và tập lỗi ban đầu nếu có. |
+| AddError | Thêm lỗi theo tên trường; bổ sung vào nhóm đã có hoặc tạo nhóm mới. |
+| Errors getter | Trả bản sao dictionary lỗi, hạn chế việc bên ngoài sửa trực tiếp dữ liệu nội bộ. |
+
+Mỗi class con sau chỉ khai báo constructor truyền message/errors vào base và Code tương ứng; không có method xử lý nghiệp vụ khác:
+
+| Class | Công dụng |
+| --- | --- |
+| BadRequestException | Input hoặc yêu cầu không hợp lệ, mã 400. |
+| UnauthorizedException | Chưa xác thực, mã 401. |
+| ForbiddenException | Không đủ quyền, mã 403. |
+| NotFoundException | Không có tài nguyên, mã 404. |
+| ConflictUniqueValueException | Xung đột nghiệp vụ, mã 409; file tên ConflictUniqueValue.cs. |
+
+### 4.11. Folder Constants
+
+| Class | Công dụng và method |
+| --- | --- |
+| BussinessRuleMessage | Tập thông báo validation, chia nhóm lồng FileValidator và JobValidator; không có method. |
+| ApplicationErrorMessage | Tập thông báo lỗi job/file dùng chung; không có method. |
+
+## 5. Project Infrastructure — triển khai dịch vụ kỹ thuật
+
+Infrastructure hiện thực các interface của Application bằng Redis, filesystem và HTTP Gotenberg; đồng thời chứa ba background worker.
+
+### 5.1. Folder Repositories
+
+#### RedisJobConversionRepository
+
+Lưu/đọc ConversionJob bằng Redis Hash; dùng RedisHashExtensions để ánh xạ object.
+
+| Method | Công dụng |
+| --- | --- |
+| Constructor | Lấy IDatabase từ connection và đọc các prefix trong RedisOptions. |
+| AddAsync | Ghi thuộc tính entity vào hash; không enqueue. |
+| GetByIdAsync | Tạo key từ prefix/JobId, đọc hash và deserialize; hash rỗng trả null. |
+| UpdateAsync | Kiểm tra key còn tồn tại rồi ghi lại thuộc tính; thiếu key ném lỗi. Hai bước này không phải một điều kiện ghi nguyên tử. |
+| DeleteAsync | Xóa Redis key metadata, không dọn file hay Sorted Set. |
+
+#### RedisConversionJobAtomicOperations
+
+Thực hiện các thay đổi liên quan bằng Lua để lệnh từ client khác không chen vào giữa bước kiểm tra và bước ghi trên cùng Redis server.
+
+| Method | Công dụng và điều kiện |
+| --- | --- |
+| Constructor | Nhận connection/options; chuẩn bị database, key/prefix, polling và retention. |
+| SubmitAsync | Yêu cầu job Pending có ID. Tính SHA-256 trên bộ metadata định danh của lần submit; chuyển entity thành các cặp field/value. Lua kiểm tra kiểu dữ liệu, fingerprint rồi ghi hash và LPUSH. Cùng JobId/fingerprint đã có thì không enqueue thêm; khác fingerprint bị từ chối. Nếu LPUSH báo lỗi sau khi tạo hash mới, script cố xóa hash vừa tạo. |
+| ClaimAsync | Lặp cho tới có job hoặc bị hủy. Lua đọc cuối queue, tạo hash receipt gồm JobId/LastHeartbeatAt rồi RPOP trong cùng script; trả ConversionJobClaim. Queue rỗng thì Task.Delay theo polling. |
+| GetReceiptKey | Method private tạo key từ prefix và ReceiptId dạng N, kiểm tra không trùng các key dùng chung. |
+| MarkProcessingAsync | Kiểm tra object đã Start và claim khớp job. Lua xác nhận receipt thuộc job, metadata vẫn Pending rồi ghi Status=1, ProccessedAt và xóa Error. Không dùng UpdateAsync chung để tránh ghi bằng receipt đã bị thu hồi. |
+| SaveTerminalAsync | Chỉ nhận Completed/Failed có CompletedAt. Lua kiểm tra receipt thuộc job; metadata còn Processing hoặc đúng trạng thái kết thúc tương thích. Ghi hash và ZADD lịch cleanup trong cùng script. Score bằng CompletedAt cộng retention thường. Lưu lại cùng trạng thái yêu cầu CompletedAt khớp; không tự ACK. |
+| HeartbeatAsync | Lua đọc JobId trong receipt, khớp mới HSET LastHeartbeatAt bằng Unix milliseconds hiện tại. Receipt mất/không khớp trả false và không tạo lại. Method này không kiểm tra hash metadata job. |
+| AcknowledgeAsync | Lua chỉ DEL receipt nếu JobId trong receipt khớp claim. Gọi lặp khi receipt đã mất không tạo dữ liệu mới. |
+| ScanReceiptsAsync | Duyệt các primary qua GetServer, SCAN key theo prefix và page size; HMGET JobId/LastHeartbeatAt từng receipt. Parse GUID/timestamp hợp lệ rồi yield claim; không sửa dữ liệu. |
+| TryRecoverAsync | Lua đọc lại receipt, JobId và heartbeat <= staleBefore. Metadata mất thì bỏ receipt; Pending thì LPUSH nếu chưa ở queue rồi bỏ receipt; Completed/Failed/Interrupted thì bỏ receipt; Processing thì ghi Interrupted/Error/CompletedAt, ZADD lịch riêng rồi bỏ receipt. Trả true khi thực hiện nhánh recovery, false khi điều kiện không còn đúng. |
+
+Fingerprint là mã băm của metadata, không phải mã băm nội dung file. Submit file giống nhau bằng JobId mới vẫn tạo job mới.
+
+Các script là chuỗi hằng nội bộ tương ứng từng thao tác. Redis chạy từng script lần lượt; script không chứa việc convert hoặc đọc/ghi file. Tính nguyên tử ở đây không có nghĩa Redis tự rollback mọi lệnh đã chạy nếu script gặp lỗi runtime.
+
+#### RedisJobCleanupSchedule
+
+Quản lý Sorted Set cleanup: member là JobId, score là thời điểm được phép dọn hoặc mốc retry.
+
+| Method | Công dụng |
+| --- | --- |
+| Constructor | Lấy database, prefix metadata và cleanup key. |
+| GetDueJobIdsAsync | Truy vấn score từ -inf đến now, tăng dần, offset 0 và tối đa count; parse member thành GUID. Đây là thao tác đọc, member còn đó cho tới khi xóa thành công. |
+| DeleteJobAsync | Lua xác thực trạng thái metadata nếu còn, cho phép Completed/Failed/Interrupted; ZREM member và DEL metadata trong cùng script. Không xóa file. |
+| DeferAsync | Lua ZADD XX GT: chỉ tăng thời điểm của member đang tồn tại. Không tạo lại lịch nếu tác vụ khác đã xóa member. |
+
+### 5.2. Folder Workers
+
+#### ConversionJobWorker
+
+Worker nhận job và điều khiển toàn bộ một lần conversion. Nhiều async loop cho phép các job độc lập chạy song song.
+
+| Method | Công dụng |
+| --- | --- |
+| Constructor | Nhận atomic operations, repository, file manager, converter, options, logger; kiểm tra concurrency và heartbeat interval. |
+| ExecuteAsync | Khởi chạy MaxConcurrentJobs vòng ProcessJobsAsync và chờ bằng Task.WhenAll; xử lý hủy khi host dừng. |
+| ReadJobs | Async iterator gọi ClaimAsync để cung cấp claim; lỗi nhận job được log và chờ trước khi thử lại; host dừng thì kết thúc. |
+| ProcessJobsAsync | Với từng claim: tạo token xử lý và heartbeat riêng, đọc metadata, xác minh ID/trạng thái. Pending thì job.Start và MarkProcessingAsync; mở input, gọi converter với callback lưu PDF nguyên tử; Complete hoặc Fail; SaveTerminalAsync rồi ACK. Lỗi lưu Redis giữ receipt cho recovery. Finally hủy và await heartbeat trước khi chuyển claim tiếp theo. |
+| RunHeartbeatAsync | Chờ Task.Delay theo interval rồi gửi heartbeat. Receipt invalid thì hủy token xử lý claim; lỗi Redis được log và thử lại nhịp sau. Dừng khi token heartbeat bị hủy. |
+
+`job.Start()` sửa object trong RAM; MarkProcessingAsync kiểm tra và ghi Redis. Token heartbeat riêng cho phép dừng nhịp sống khi job xong mà không phải hủy công việc đã hoàn tất. Các token đều liên kết với token dừng host.
+
+#### CleanupWorker
+
+Dọn tài nguyên đã đến hạn theo từng batch; lỗi một job không ngăn xử lý các job còn lại trong batch.
+
+| Method | Công dụng |
+| --- | --- |
+| Constructor | Nhận schedule, cleanup service, options, TimeProvider và logger. |
+| ExecuteAsync | Lấy tối đa BatchSize member có score <= now; gọi cleanup tự động từng job. Nếu trả false hoặc ném lỗi thì gọi DeferRetryAsync, tiếp tục job khác. Sau batch chờ IntervalSeconds; không có vòng lặp vét hết backlog. |
+| DeferRetryAsync | Dời lịch tới thời điểm hiện tại cộng hai interval. Nếu Redis không cho hoãn được thì log và giữ dữ liệu để vòng sau thử tiếp. |
+
+#### RecoveryWorker
+
+Phát hiện receipt mất heartbeat và xử lý job bị bỏ dở theo trạng thái hiện có.
+
+| Method | Công dụng |
+| --- | --- |
+| Constructor | Nhận atomic operations, RecoveryOptions, TimeProvider và logger. |
+| ExecuteAsync | Tính staleBefore = now - HeartbeatTimeoutSeconds; duyệt toàn bộ receipt theo trang, bỏ qua heartbeat còn mới. Với receipt quá hạn, gọi TryRecoverAsync để kiểm tra lại và thay đổi nguyên tử. Lỗi từng receipt được log riêng; sau vòng quét chờ IntervalSeconds. |
+
+### 5.3. Folder Converters
+
+#### GotenbergDocumentConverter
+
+Adapter HTTP chuyển input sang PDF thông qua Gotenberg.
+
+| Method | Công dụng |
+| --- | --- |
+| Constructor | Nhận HttpClient, GotenbergOptions và logger. |
+| ConvertToPdfAsync | Kiểm tra tham số, tạo deadline liên kết token caller, gọi SendWithRetryAsync; yêu cầu HTTP thành công; đọc PDF dưới dạng stream và gọi callback lưu. Deadline bao gồm gửi, chờ retry, đọc PDF và callback; quá deadline được diễn giải thành TimeoutException khi caller chưa hủy. |
+| SendWithRetryAsync | Tạo multipart POST `/forms/libreoffice/convert`, dùng ResponseHeadersRead. Stream seek được sẽ reset về vị trí ban đầu cho mỗi attempt; stream không seek chỉ gửi một lần. Retry một số lỗi mạng/timeout/HTTP 5xx khi còn lượt, dispose response lỗi rồi delay; lỗi đọc PDF hoặc callback nằm ngoài vòng gửi lại này. |
+
+#### LeaveOpenReadStream — class private lồng trong converter
+
+Bọc input stream để việc dispose multipart không đóng input gốc cần dùng cho attempt sau.
+
+| Method/thành phần | Công dụng |
+| --- | --- |
+| Constructor | Nhận stream gốc và từ chối null. |
+| Read, ReadAsync | Chuyển các overload đọc đồng bộ/bất đồng bộ sang stream gốc. |
+| Seek | Chuyển thao tác đổi vị trí sang stream gốc. |
+| Flush, SetLength, Write | Ném NotSupportedException vì wrapper chỉ phục vụ đọc. |
+| CanRead, CanSeek, Length, Position | Phản ánh stream gốc; CanWrite=false. Dispose wrapper không đóng stream gốc. |
+
+#### GotenbergOptions
+
+Chứa BaseUrl, TimeoutInMinutes, DeadlineInMinutes, MaxAttempts, RetryDelayInMinutes; không khai báo method. Chi tiết cấu hình ở phần 9.
+
+### 5.4. Folder HelperServices/Storage
+
+#### LocalFileManagerService
+
+Lưu file dưới một root cố định, dùng storage key tương đối và hỗ trợ ghi file nguyên tử ở bước công bố kết quả.
+
+| Method | Công dụng |
+| --- | --- |
+| Constructor | Kiểm tra RootPath, chuẩn hóa đường dẫn và tạo root. |
+| ResolvePath | Method private kết hợp key với root, GetFullPath rồi kiểm tra đường dẫn còn dưới root; từ chối đường dẫn thoát root. |
+| SaveFileAsync | Tạo thư mục cha, mở file ghi bất đồng bộ, copy stream; trả storage key. Ghi trực tiếp nên có thể để lại file dở nếu bị lỗi. |
+| SaveFileAtomicallyAsync | Ghi sang temp cùng thư mục, đóng handle, kiểm tra hủy rồi File.Move đè file đích; finally dọn temp còn sót. Người đọc không thấy nội dung file đích đang ghi dở qua bước ghi này. |
+| ReadFileAsync | Mở FileStream đọc bất đồng bộ; caller dispose stream. |
+| DeleteFileAsync | Resolve key, kiểm tra tồn tại và xóa; file thiếu trả false, lỗi filesystem được ném lên. |
+| ExistsAsync | Resolve key và trả kết quả File.Exists. |
+
+#### StorageOptions
+
+Chứa RootPath; không khai báo method. Api thiết lập root theo content root của ứng dụng.
+
+### 5.5. Folder Extensions
+
+#### RedisHashExtensions
+
+Static partial class nằm trong hai file HashSetWithObject và HashGetToObject; ánh xạ public property sang field Redis Hash, value serialize bằng JSON.
+
+| Method | Công dụng |
+| --- | --- |
+| ToHashEntries | Reflection các public property đọc được, bỏ indexer, tạo HashEntry tên property/value JSON. |
+| HashSetObjectAsync | Chuyển object thành HashEntry rồi gọi HashSetAsync; hỗ trợ hủy việc chờ. |
+| HashGetToObjectAsync<T> | HGETALL; hash rỗng trả null, nếu có thì gọi FromHashEntries. |
+| FromHashEntries<T> | Method private tạo object, tìm property/setter kể cả private setter rồi deserialize theo kiểu property; bỏ field không ánh xạ như _SubmissionFingerprint. |
+
+### 5.6. Folder Readiness
+
+#### ReadinessService
+
+Đánh giá Redis, storage và HTTP Gotenberg có sẵn sàng phục vụ hay không.
+
+| Method | Công dụng |
+| --- | --- |
+| Constructor | Nhận connection, file manager, HttpClient, options và logger. |
+| CheckAsync | Tạo deadline chung; chạy đồng thời Redis PING, kiểm tra storage và GET `/health`; gom bool từng dependency vào ReadinessResult. |
+| ProbeAsync | Method private bọc từng phép kiểm tra; log lỗi và trả false khi dependency lỗi/deadline hết. Nếu caller hủy request thì cho cancellation truyền lên. |
+| CheckStorageAsync | Ghi file probe vào input và output, đọc lại byte để xác nhận, finally xóa probe bằng token độc lập để cố dọn khi request đã bị hủy. |
+
+### 5.7. Folder Options
+
+Các class dưới đây mang cấu hình, không khai báo method nghiệp vụ. Rule kiểm tra giá trị được đặt ở Api/Registrations.
+
+| Class | Công dụng/thuộc tính chính |
+| --- | --- |
+| RedisOptions | ConnectionString, QueueKey, ReceiptKey, JobKey, BatchKey, CleanupKey, PollIntervalMilliseconds. |
+| ConversionWorkerOptions | MaxConcurrentJobs mỗi instance và HeartbeatIntervalSeconds. |
+| CleanupOptions | RetentionMinutes, InterruptedRetentionMinutes, IntervalSeconds, BatchSize. |
+| RecoveryOptions | HeartbeatTimeoutSeconds, IntervalSeconds, ScanPageSize. |
+| ReadinessOptions | TimeoutSeconds cho readiness. |
+
+## 6. Project Api — HTTP và khởi tạo ứng dụng
+
+### 6.1. Folder Controllers
+
+#### ConversionsController
+
+Nhận HTTP, chuyển dữ liệu sang use case qua MediatR và định dạng response.
+
+| Method | Route và công dụng |
+| --- | --- |
+| Constructor | Nhận ISender. |
+| ConvertToPDF | POST `/api/conversions`: mở stream upload, tạo FileParams, gửi ConverToPDF_UCInput; trả 202 cùng kết quả tiếp nhận. Finally dispose các input stream đã mở. |
+| GetJob | GET `/api/conversions/job/{jobId}`: gửi GetJob_UCInput, bọc output trong ApiSuccessResponse và trả 200. |
+| GetFileOfJob | GET `/api/conversions/job/{jobId}/file`: gửi use case, trả File response chứa PDF stream/MIME/tên tải về; không bọc JSON. |
+| DeleteResourceRelatedToJob | DELETE `/api/conversions/job/{jobId}`: gửi use case xóa thủ công, trả JSON kết quả 200. |
+
+#### CheckController
+
+Cung cấp liveness của process và readiness phụ thuộc.
+
+| Method | Công dụng |
+| --- | --- |
+| Constructor | Nhận IReadinessService. |
+| CheckHealth | GET `/check/health`, trả 200 với thông tin healthy; không gọi dependency. |
+| CheckReady | GET `/check/ready`, gọi CheckAsync; trả 200 nếu Ready=true, ngược lại 503 và danh sách dependency lỗi. |
+
+### 6.2. Folder ApiResponseModels
+
+| Class | Công dụng và method |
+| --- | --- |
+| ApiResponse<T> | Abstract chứa Success, Message, Data; không có method nghiệp vụ. |
+| ApiSuccessResponse<T> | Constructor nhận data/message; Success=true. |
+| ApiErrorResponse | Constructor nhận message/dictionary lỗi; Success=false, Data chứa lỗi theo trường hoặc dependency. |
+
+### 6.3. Folder Middlewares
+
+#### GlobalExceptionHandlerMiddleware
+
+Chuyển exception từ pipeline thành response lỗi thống nhất.
+
+| Method | Công dụng |
+| --- | --- |
+| Constructor | Nhận logger. |
+| InvokeAsync | Gọi middleware tiếp theo, bắt/log lỗi; RequestAborted được xử lý riêng và gán 499 nếu response chưa bắt đầu. Lỗi khác chuyển sang HandleExceptionAsync. |
+| HandleExceptionAsync | Method private ánh xạ business exception sang 400/401/403/404/409, lỗi khác thành 500; serialize ApiErrorResponse với JSON camelCase. |
+
+### 6.4. Folder Registrations
+
+Mỗi class là static extension class chuyên đăng ký một nhóm dependency. Các method trả IServiceCollection để gọi nối tiếp khi khởi tạo host.
+
+| Class | Method | Công dụng |
+| --- | --- | --- |
+| ConfigurationOptionsRegistration | RegisterConfigurationOptions | Bind section Redis/Worker/Cleanup/Recovery/Readiness/Gotenberg; kiểm tra giá trị và ValidateOnStart; thiết lập StorageOptions.RootPath. |
+| HelperServicesRegistration | RegisterHelperServices | Đăng ký connection Redis và các singleton storage, atomic operations, cleanup service, schedule, TimeProvider.System; typed HttpClient cho converter/readiness. |
+| RepositoryRegistration | RegisterRepositories | Đăng ký IJobConversionRepository thành RedisJobConversionRepository, vòng đời singleton. |
+| UseCasesHandlersRegistration | RegisterUseCasesHandlers | Lấy assembly qua ConverToPDF_UCInput, đăng ký MediatR handler, ValidationBehavior và quét validator trong Application. |
+| WorkersRegistration | RegisterWorkers | AddHostedService cho ConversionJobWorker, CleanupWorker và RecoveryWorker; ba worker chạy cùng host .NET. |
+| MiddlewareRegistration | RegisterMiddlewares | Đăng ký GlobalExceptionHandlerMiddleware. |
+
+### 6.5. Program, Constants và file cấu hình
+
+#### Program
+
+`Main` là điểm vào ứng dụng: nạp `.env` bằng Env.NoClobber, tạo builder, đăng ký controllers/OpenAPI và các dependency; build host; thiết lập exception middleware, OpenAPI khi Development, HTTPS redirection, authorization, controllers rồi chạy host.
+
+#### ApiErrorResponseMessage
+
+Class trong Constants chứa thông báo lỗi mặc định của Api; không có method.
+
+`Properties/launchSettings.json` chứa profile chạy local và cổng HTTP/HTTPS. `appsettings.json` và `appsettings.Development.json` chứa logging/host settings; `.env` chứa cấu hình kết nối và worker. UseAuthorization hiện có trong pipeline nhưng không đồng nghĩa đã triển khai authentication/chính sách bảo vệ endpoint.
+
+
+## 7. Các luồng hoạt động
+
+### 7.1. Luồng use case convert: tiếp nhận và chuyển đổi nền
+
+```mermaid
+sequenceDiagram
+    actor C as Client
+    participant A as API / Application
+    participant S as Storage
+    participant R as Redis
+    participant W as Conversion worker
+    participant G as nginx / Gotenberg
+    C->>A: Upload Word
+    A->>A: Validation
+    A->>S: Lưu input nguyên tử
+    A->>R: Submit Pending và LPUSH
+    A-->>C: 202 và JobId
+    W->>R: Claim: tạo receipt và RPOP
+    W->>R: Đọc metadata
+    W->>W: job.Start trong RAM
+    W->>R: MarkProcessing kiểm tra receipt/Pending
+    Note over W,R: Heartbeat định kỳ
+    W->>G: Gửi conversion
+    G-->>W: PDF stream
+    W->>S: Lưu PDF nguyên tử
+    W->>R: SaveTerminal và lịch cleanup
+    W->>R: ACK xóa receipt
+    W->>W: Hủy và await heartbeat
+    C->>A: Tra cứu / tải PDF
+```
+
+Giữa claim và MarkProcessing, metadata có thể vẫn Pending dù job đã ra queue và có receipt. Recovery xử lý trường hợp worker dừng tại khoảng này.
+
+### 7.2. Heartbeat và quyền ghi trạng thái
+
+Mỗi lần claim tạo một ReceiptId mới và hash receipt riêng. Worker duy trì vòng heartbeat trong lúc đọc input, chuyển đổi, lưu kết quả và ACK:
+
+```text
+Claim thành công, có LastHeartbeatAt ban đầu
+→ Bắt đầu vòng Task.Delay theo HeartbeatIntervalSeconds
+→ HeartbeatAsync kiểm tra JobId trong receipt và cập nhật timestamp
+→ Job kết thúc: hủy vòng heartbeat và await nó trong finally
+```
+
+Nếu receipt mất hoặc không khớp job, HeartbeatAsync trả false và worker hủy token xử lý claim đó. Lỗi kết nối Redis không bị coi là thu hồi receipt; worker log và thử heartbeat lại.
+
+Heartbeat không thay thế kiểm tra lúc ghi. MarkProcessingAsync kiểm tra receipt và trạng thái Redis còn Pending trước khi ghi Processing. SaveTerminalAsync kiểm tra receipt và trạng thái trước khi lưu Completed/Failed cùng lịch cleanup. Các kiểm tra và thay đổi nằm trong cùng Lua script; receipt đã bị recovery xóa không cho phép worker cũ ghi trạng thái tiếp.
+
+### 7.3. Luồng cleanup
+
+```text
+Lấy tối đa BatchSize job có score <= now
+→ Đọc metadata và xác thực trạng thái
+→ Xóa input/PDF
+→ Lua xóa metadata và member cleanup
+→ Chờ IntervalSeconds
+```
+
+Completed/Failed và Interrupted dùng chung Sorted Set và chung thao tác dọn input, PDF, metadata. Khác biệt nằm ở hạn ghi vào score:
+
+| Trạng thái | Thời điểm đến hạn |
+| --- | --- |
+| Completed/Failed | CompletedAt + CLEANUP__RetentionMinutes |
+| Interrupted | Thời điểm recovery ghi nhận gián đoạn + CLEANUP__InterruptedRetentionMinutes |
+
+Score được lưu khi job kết thúc/gián đoạn. Cleanup lấy score <= now, không tính lại cutoff từ CompletedAt. Mỗi vòng lấy một batch, không lặp liên tục tới khi hết backlog.
+
+Lỗi hoặc bỏ qua: hoãn member tới now + 2 × IntervalSeconds. Metadata đã mất: bỏ member còn sót. Hoãn không tạo lại member đã xóa.
+
+### 7.4. Luồng recovery
+
+RecoveryWorker được đăng ký AddHostedService và chạy cùng host. Nó quét receipt theo từng trang, lọc heartbeat quá hạn rồi gọi TryRecoverAsync. Lua đọc lại heartbeat và metadata tại thời điểm thực thi, không chỉ tin snapshot từ SCAN.
+
+```text
+Khởi động host
+→ Quét các hash receipt theo prefix
+→ Tính staleBefore = now - HeartbeatTimeoutSeconds
+→ Với receipt có heartbeat <= staleBefore:
+   → Lua kiểm tra lại receipt, JobId, heartbeat và trạng thái
+   → Thực hiện một trong các nhánh bên dưới
+→ Quét hết các trang
+→ Chờ IntervalSeconds rồi lặp lại
+```
+
+| Case hiện tại trong Redis | Thao tác của recovery | Kết quả |
+| --- | --- | --- |
+| Receipt đã mất hoặc JobId không khớp | Không ghi | Tránh thay đổi một delivery khác |
+| Heartbeat vừa được cập nhật, chưa quá hạn | Không ghi | Worker đang hoạt động tiếp tục xử lý |
+| Job Pending | LPUSH nếu job chưa có trong queue, DEL receipt cũ | Metadata vẫn Pending; worker khác có thể nhận lại |
+| Job Completed/Failed | DEL receipt | Giữ PDF, metadata và lịch cleanup đã có |
+| Metadata job không còn | DEL receipt | Bỏ dấu vết delivery mồ côi |
+| Job Processing | Ghi Interrupted = 4, Error, CompletedAt; ZADD lịch cleanup; DEL receipt | Job không Processing mãi và không tự convert lại |
+| Job Interrupted | DEL receipt còn sót | Không sửa trạng thái hoặc tạo conversion mới |
+| Trạng thái chưa biết hoặc heartbeat không hợp lệ | Không tự thay đổi | Không đoán cách xử lý dữ liệu không hợp lệ |
+
+Với job Pending, thao tác đưa lại queue và xóa receipt là nguyên tử. Recovery chạy lặp trên receipt đã xóa sẽ không enqueue thêm. MarkProcessingAsync chặn worker cũ sử dụng receipt bị thu hồi.
+
+Ví dụ khi API crash trong lúc Gotenberg đang convert:
+
+```text
+Job A = Processing, receipt R1 còn trong Redis
+→ Process .NET dừng, heartbeat ngừng
+→ API khởi động lại và RecoveryWorker bắt đầu quét
+→ Khi R1 quá hạn: A chuyển Interrupted, R1 bị xóa
+→ A có lịch cleanup theo InterruptedRetentionMinutes
+→ Client tra cứu thấy Interrupted và thông báo gián đoạn
+```
+
+CompletedAt của Interrupted là thời điểm gateway ghi nhận gián đoạn, không phải xác nhận thời điểm engine hoàn tất. Recovery không xóa file ngay và không gửi lại conversion.
+
+### 7.5. Tra cứu, download và DELETE
+
+Tra cứu chỉ đọc metadata, không tự thay đổi trạng thái. Download yêu cầu Completed và không tự xóa file. DELETE thủ công chỉ nhận Completed/Failed, không đợi TTL. Interrupted được dọn tự động theo lịch như các job kết thúc khác.
+
+## 8. Cấu trúc dữ liệu
+
+### 8.1. Redis
+
+| Nhóm | Kiểu | Key | Nội dung |
+| --- | --- | --- | --- |
+| Metadata | Hash | `<JobKey>:<jobId dạng D>` | Thuộc tính ConversionJob và _SubmissionFingerprint |
+| Pending | List | QueueKey | JobId dạng N, LPUSH/RPOP |
+| Receipt | Hash mỗi delivery | `<ReceiptKey>:<receiptId dạng N>` | JobId dạng N và LastHeartbeatAt |
+| Cleanup | Sorted Set | CleanupKey | Member JobId dạng N, score hạn dọn hoặc thời điểm retry |
+
+GUID dạng D có dấu gạch nối, dạng N không có dấu gạch nối. BatchKey có trong options/repository nhưng chưa có nghiệp vụ batch riêng sử dụng.
+
+| Trường thời gian | Dạng lưu Redis |
+| --- | --- |
+| CreatedAt, ProccessedAt, CompletedAt | JSON DateTimeOffset/nullable, chuỗi ISO có offset UTC hoặc JSON null |
+| LastHeartbeatAt | Unix milliseconds trong hash |
+| Score cleanup | Unix milliseconds dạng số Sorted Set |
+
+Trong C# dùng DateTimeOffset. Timestamp số giúp Lua so sánh heartbeat với now - HeartbeatTimeoutSeconds.
+
+### 8.2. Filesystem
+
+```text
+<ContentRootPath>/Storage/
+├── input/<uploadGuidN>.<extension>
+└── output/<jobIdN>.pdf
+```
+
+GUID input độc lập JobId. File tạm thêm hậu tố .<guidN>.tmp cùng thư mục file đích. Redis không lưu binary Word/PDF.
+
+## 9. Tham số cấu hình ứng dụng
+
+### 9.1. Quy tắc cấu hình
+
+Hai dấu gạch dưới của biến môi trường tương ứng dấu hai chấm của section: WORKER__MaxConcurrentJobs → WORKER:MaxConcurrentJobs.
+
+Env.NoClobber giữ biến môi trường có trước. Options dùng IOptions và ValidateOnStart, nên thay đổi .env cần restart. Giá trị .env dưới đây phản ánh file hiện tại, không khẳng định process đang chạy đã nạp lại.
+
+### 9.2. Redis
+
+| Tham số | Mặc định code | .env hiện tại / ý nghĩa |
+| --- | --- | --- |
+| REDIS__ConnectionString | localhost:6379 | Địa chỉ, auth và database Redis theo môi trường; không đưa thông tin xác thực vào báo cáo |
+| REDIS__QueueKey | fileconverter:queue | fileconverter:queue; pending list |
+| REDIS__ReceiptKey | fileconverter:receipt | fileconverter:receipt; prefix receipt |
+| REDIS__JobKey | fileconverter:storage:job | fileconverter:job; prefix metadata |
+| REDIS__BatchKey | fileconverter:storage:batch | fileconverter:batch; chưa dùng cho nghiệp vụ batch riêng |
+| REDIS__CleanupKey | fileconverter:cleanup | fileconverter:cleanup; Sorted Set |
+| REDIS__PollIntervalMilliseconds | 250 | 250 ms; chờ khi queue rỗng |
+
+Các chuỗi bắt buộc không rỗng; polling dương; ReceiptKey khác QueueKey; CleanupKey khác các key còn lại và không nằm dưới namespace JobKey.
+
+### 9.3. Worker
+
+| Tham số | Mặc định code | .env hiện tại | Ý nghĩa |
+| --- | --- | --- | --- |
+| WORKER__MaxConcurrentJobs | 0, phải đặt số dương | 20 | Số async loop mỗi instance |
+| WORKER__HeartbeatIntervalSeconds | 10 | 10 | Khoảng chờ giữa heartbeat |
+
+Heartbeat interval hợp lệ 1–3600 giây. Với Task.Delay, thời gian giữa hai lần gửi còn gồm thời gian xử lý lần gọi Redis trước. Concurrency là mỗi process, không phải quota chung toàn cụm.
+
+### 9.4. Cleanup
+
+| Tham số | Mặc định code | .env hiện tại | Ý nghĩa |
+| --- | --- | --- | --- |
+| CLEANUP__RetentionMinutes | 10 | 5 | Số phút giữ Completed/Failed từ CompletedAt |
+| CLEANUP__InterruptedRetentionMinutes | 60 | 5 | Số phút giữ Interrupted từ lúc ghi nhận gián đoạn |
+| CLEANUP__IntervalSeconds | 30 | 120 | Chờ sau mỗi batch |
+| CLEANUP__BatchSize | 100 | 100 | Số member tối đa mỗi vòng |
+
+Retention hợp lệ 1–525600 phút; interval 1–86400 giây; BatchSize 1–10000. Interval hiện tại 120 giây nghĩa là lỗi cleanup được hoãn 240 giây.
+
+**Interrupted trong .env hiện là 5 phút**, khác mặc định 60 phút. Nếu muốn một giờ, đặt CLEANUP__InterruptedRetentionMinutes=60 rồi restart. Lịch đã ghi không tự thay đổi khi sửa retention.
+
+### 9.5. Recovery
+
+| Tham số | Mặc định code | .env hiện tại | Ý nghĩa |
+| --- | --- | --- | --- |
+| RECOVERY__HeartbeatTimeoutSeconds | 60 | 60 | Tuổi heartbeat tối thiểu để xét recovery |
+| RECOVERY__IntervalSeconds | 30 | 30 | Chờ sau một vòng quét |
+| RECOVERY__ScanPageSize | 100 | 100 | Gợi ý kích thước trang SCAN, không giới hạn tổng receipt mỗi vòng |
+
+Timeout/interval hợp lệ 1–86400 giây, ScanPageSize 1–10000. Timeout phải ít nhất ba heartbeat interval. Worker quét một vòng khi khởi động rồi chờ giữa các vòng.
+
+### 9.6. Gotenberg
+
+| Tham số | Mặc định code | .env hiện tại | Ý nghĩa |
+| --- | --- | --- | --- |
+| GOTENBERG__BaseUrl | Rỗng, phải cung cấp URL tuyệt đối | http://localhost | Đầu mối nginx/Gotenberg |
+| GOTENBERG__TimeoutInMinutes | 3 | Không khai báo, dùng mặc định | Timeout HttpClient đến headers |
+| GOTENBERG__DeadlineInMinutes | 5 | 5 | Tổng ngân sách conversion, retry, đọc/lưu PDF |
+| GOTENBERG__MaxAttempts | 1 | 1 | Tổng attempt, gồm lần đầu |
+| GOTENBERG__RetryDelayInMinutes | 0 | 2 | Khoảng chờ khi có retry |
+
+Timeout dương; deadline 1–71582 phút; attempts ít nhất 1; retry delay không âm. MaxAttempts hiện là 1 nên RetryDelayInMinutes=2 chưa dẫn tới gửi lại tự động.
+
+### 9.7. Readiness, storage và host
+
+| Tham số | Giá trị/hành vi |
+| --- | --- |
+| READINESS__TimeoutSeconds | Mặc định và .env đều 5; hợp lệ 1–60 giây |
+| StorageOptions.RootPath | Code thiết lập `<ContentRootPath>/Storage`; chưa bind STORAGE từ .env |
+| Serilog:MinimumLevel:Default | Information |
+| Serilog:MinimumLevel:Override:Microsoft.AspNetCore | Warning |
+| AllowedHosts | * |
+| ASPNETCORE_ENVIRONMENT | Development trong profile local, quyết định map OpenAPI |
+| ASPNETCORE_URLS | Có thể cấu hình bind cổng khi triển khai; local profile dùng HTTP 5156, HTTPS 7195 |
+
+Readiness có deadline cho I/O hỗ trợ cancellation; filesystem đồng bộ và dọn file probe không phải timeout cưỡng bức của hệ điều hành.
+
+### 9.8. Ghi log ra file theo ngày
+
+Api dùng Serilog.AspNetCore 10.0.0 để nhận các log từ ILogger hiện có, đồng thời ghi console và file. Program.Main khởi tạo logger từ configuration, ghi sự kiện khởi động/lỗi dừng host và CloseAndFlush trong finally. UseSerilogRequestLogging ghi method, đường dẫn, HTTP status và thời gian xử lý; đặt ngoài exception middleware để thấy status cuối cùng.
+
+File mặc định nằm dưới content root của Api:
+
+```text
+Logs/
+├── application-20261108.log
+├── application-20261108_001.log
+└── application-20261109.log
+```
+
+Mỗi ngày mở file mới. Khi đạt 50 MiB thì mở file có hậu tố số trong cùng ngày; giữ tối đa 31 file gần nhất, không phải bảo đảm 31 ngày. File cũ được dọn khi sink mở/roll file. Mốc ngày theo timezone hệ điều hành chạy ứng dụng; container muốn giờ Việt Nam cần cấu hình timezone Asia/Ho_Chi_Minh.
+
+| Tham số trong appsettings.json | Mặc định | Ý nghĩa |
+| --- | --- | --- |
+| Serilog:WriteTo:1:Args:path | Logs/application-.log | Path tương đối được Program chuẩn hóa theo ContentRootPath; có thể đặt path tuyệt đối. |
+| Serilog:WriteTo:1:Args:rollingInterval | Day | Xoay file hằng ngày. |
+| Serilog:WriteTo:1:Args:rollOnFileSizeLimit | true | Mở file tiếp theo khi đạt giới hạn dung lượng. |
+| Serilog:WriteTo:1:Args:fileSizeLimitBytes | 52428800 | 50 MiB/file. |
+| Serilog:WriteTo:1:Args:retainedFileCountLimit | 31 | Số file được giữ tối đa. |
+| Serilog:WriteTo:1:Args:shared | true | Cho phép nhiều process mở file; khi triển khai nhiều container nên dùng thư mục log riêng từng instance. |
+
+Có thể override qua biến môi trường, ví dụ `Serilog__WriteTo__1__Args__path=/var/log/fileconverter/application-.log`, `Serilog__WriteTo__1__Args__retainedFileCountLimit=60`, `Serilog__MinimumLevel__Default=Debug`. Restart ứng dụng để áp dụng đầy đủ thay đổi sink. Log file có timestamp kèm offset, level, SourceContext, message, các property như JobId và exception/stack trace nếu có. Không ghi nội dung file upload, request body hoặc thông tin xác thực. Folder Logs được bỏ qua trong Git; khi chạy container cần mount volume log nếu muốn giữ qua việc tạo lại container.
+
+## 10. Cấu hình hạ tầng
+
+### 10.1. LibreOffice/GotenbergCluster/docker-compose.yml
+
+| Tham số | Giá trị trong file | Ý nghĩa |
+| --- | --- | --- |
+| nginx image | nginx:1.28-alpine | Proxy/LB |
+| nginx ports | 80:3000 | Host 80 tới container 3000 |
+| Config mount | nginx.conf, read-only | Cấu hình nginx |
+| Gotenberg image | gotenberg/gotenberg:8 | Engine conversion |
+| --api-timeout | 180s | Timeout request tại engine |
+| --libreoffice-restart-after | 1 | Chu kỳ restart LibreOffice theo số conversion |
+| deploy.replicas | 20 | Số replica khai báo |
+| CPU mỗi replica | 0.25 | Giới hạn tài nguyên |
+| RAM mỗi replica | 512m | Giới hạn tài nguyên |
+
+Replica là giá trị khai báo, không phải xác nhận số container đang hoạt động. Image tag major 8 chưa cố định patch/digest.
+
+### 10.2. LibreOffice/GotenbergCluster/nginx.conf
+
+| Directive | Giá trị hiện tại | Vai trò |
+| --- | --- | --- |
+| worker_connections | 1024 | Kết nối trên nginx worker |
+| resolver | 127.0.0.11 valid=10s ipv6=off | Docker DNS |
+| upstream zone | gotenberg_pool 64k | Shared state trong instance nginx |
+| Thuật toán | least_conn | Phân phối theo kết nối hoạt động |
+| Upstream | gotenberg:3000 resolve | Resolve địa chỉ engine |
+| max_fails / fail_timeout | 1 / 10s | Chính sách lỗi thụ động |
+| listen | 3000 | Cổng trong container |
+| client_max_body_size | 100m | Giới hạn request tại nginx |
+| client_body_timeout / send_timeout | 150s / 150s | Timeout phía client |
+| proxy_http_version | 1.1 | Giao thức upstream |
+| proxy_request_buffering | Dòng on đang comment; chưa khai báo off | Mặc định nginx vẫn on |
+| proxy_buffering | off | Stream response PDF về worker |
+| proxy_ignore_client_abort | on | Không chủ động bỏ upstream chỉ vì client ngắt |
+| proxy_connect/send/read_timeout | 300s mỗi mục | Timeout giai đoạn proxy, không phải deadline tổng |
+| proxy_next_upstream | off | Không replay POST conversion sang upstream khác |
+| /nginx-health | 200 cố định | Liveness nginx |
+
+Request buffering áp dụng Word gửi lên; response buffering áp dụng PDF trả về. Comment dòng proxy_request_buffering on không chuyển nó thành off; muốn off cần khai báo trực tiếp.
+
+### 10.3. LibreOffice/Gotenberg/docker-compose.yml
+
+Cấu hình một engine riêng: publish 3000, API timeout 10 giây, restart-after 1, giới hạn 0.25 CPU/512 MiB, healthcheck /health. BaseUrl hiện trỏ host port 80 nên cần phân biệt với engine đơn ở port 3000.
+
+### 10.4. Redis/docker-compose.yml
+
+Redis image 7.4-alpine3.21, host port 6379, volume /data và bật appendonly yes. RedisInsight dùng port 5540, volume riêng và kết nối Redis qua mạng nội bộ.
+
+Ứng dụng dùng REDIS__ConnectionString. Persistence Redis không thay thế lưu trữ Word/PDF trên disk; hai nơi lưu trữ cần được quản lý đồng bộ khi chuyển host.
+
+## 11. Lưu ý vận hành
+
+- 202 là tiếp nhận job, không đồng nghĩa PDF đã tạo; các file trong request có thể được tiếp nhận thành công một phần.
+- Queue FIFO theo thứ tự submit thực sự tới Redis; thứ tự hoàn thành khác nhau do conversion song song.
+- Interrupted phản ánh gateway mất heartbeat, không chứng minh engine đã dừng. Không tự retry conversion của trạng thái này.
+- Cleanup chủ động xóa file rồi mới xóa Redis; xóa metadata không tự làm filesystem biến mất.
+- Các lịch cleanup cũ không tự được tính lại khi thay retention; job thiếu lịch và hash receipt tổng cũ chưa tự migrate.
+- Các key trong cùng Lua phải chung hash slot nếu chuyển Redis Cluster; compose hiện dùng Redis standalone.
+- Nhiều host cùng namespace Redis cần truy cập chung input/output; local disk không tự chia sẻ.
+- Các host cần đồng bộ đồng hồ UTC cho heartbeat/recovery/cleanup.
+- Giới hạn 20 MiB/file trong validator không thay thế giới hạn body của HTTP server và reverse proxy.
+- Metadata và receipt hiện dùng Redis, chưa có database lịch sử độc lập.

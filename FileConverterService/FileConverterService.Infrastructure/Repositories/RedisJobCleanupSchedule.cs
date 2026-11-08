@@ -21,7 +21,7 @@ public sealed class RedisJobCleanupSchedule(IConnectionMultiplexer connection, I
 
     private const string DeleteScript = """
         local status = redis.call('HGET', KEYS[1], 'Status')
-        if status and status ~= '2' and status ~= '3' then
+        if status and status ~= '2' and status ~= '3' and status ~= '4' then
             return redis.error_reply('Cannot delete an active job')
         end
         local cleanupType = redis.call('TYPE', KEYS[2]).ok

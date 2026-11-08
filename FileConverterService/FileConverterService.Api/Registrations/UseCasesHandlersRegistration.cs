@@ -9,7 +9,7 @@ namespace FileConverterService.Api.Registrations
     {
         public static IServiceCollection RegisterUseCasesHandlers(this IServiceCollection services)
         {
-            var applicationAssembly = typeof(FileConverterService.Application.AssemblyReference).Assembly;
+            var applicationAssembly = typeof(FileConverterService.Application.UseCases.ConvertToPDF.ConverToPDF_UCInput).Assembly;
 
             services.AddMediatR(cfg =>
             {

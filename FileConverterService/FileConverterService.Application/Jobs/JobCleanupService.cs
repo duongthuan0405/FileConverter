@@ -23,7 +23,9 @@ public sealed class JobCleanupService(IJobConversionRepository repository, IFile
 
         if (job.Id != jobId)
             throw new InvalidOperationException("Stored job ID does not match cleanup job ID.");
-        if (job.Status is not (ConversionJobStatus.Completed or ConversionJobStatus.Failed))
+        var canCleanup = job.Status is ConversionJobStatus.Completed or ConversionJobStatus.Failed
+            || (automatic && job.Status == ConversionJobStatus.Interrupted);
+        if (!canCleanup)
         {
             if (automatic) return false;
             throw new ConflictUniqueValueException(ApplicationErrorMessage.JobIsActive);

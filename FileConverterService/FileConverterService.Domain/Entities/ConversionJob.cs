@@ -109,6 +109,15 @@ public sealed class ConversionJob
         CompletedAt = DateTimeOffset.UtcNow;
     }
 
+    public void Interrupt(string error)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(error);
+        EnsureStatus(ConversionJobStatus.Processing);
+        Status = ConversionJobStatus.Interrupted;
+        Error = error;
+        CompletedAt = DateTimeOffset.UtcNow;
+    }
+
     private void EnsureStatus(ConversionJobStatus expectedStatus)
     {
         if (Status != expectedStatus)

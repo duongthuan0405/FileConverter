@@ -2,4 +2,5 @@
 .env
 obj/
 bin/
+Logs/
 FileConverterService/FileConverterService.Api/Storage

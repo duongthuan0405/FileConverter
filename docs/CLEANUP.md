@@ -45,3 +45,7 @@ Lua chạy không bị client khác xen ngang, nhưng không tự rollback mọi
 Các project kiểm thử .NET đã được gỡ. Các script thử nghiệm Gotenberg trong LibreOffice vẫn được giữ.
 
 Retry cleanup: ExecuteAsync trả false hoặc ném exception thì worker hoãn member còn tồn tại thêm hai chu kỳ. Metadata không còn và member đã được dọn thì thao tác hoãn không tạo lại member. Nếu Redis lỗi khiến hoãn thất bại, worker log lỗi và tiếp tục các job khác; việc dời lịch cần Redis hoạt động.
+
+## Cleanup Interrupted
+
+CLEANUP__InterruptedRetentionMinutes=60: khi recovery chuyển Processing sang Interrupted, cùng Lua ghi lịch dọn tài nguyên tại CompletedAt + 60 phút và xóa receipt. Tới hạn, cleanup tự động dùng chung luồng Completed/Failed: xóa input/PDF rồi xóa metadata Redis và member cleanup. Completed/Failed vẫn dùng RetentionMinutes và dọn cả file như trước. DELETE thủ công vẫn chỉ cho Completed/Failed. Một giờ là chính sách lưu dữ liệu, không phải bằng chứng engine đã dừng. Job Interrupted cũ thiếu lịch chưa được backfill.

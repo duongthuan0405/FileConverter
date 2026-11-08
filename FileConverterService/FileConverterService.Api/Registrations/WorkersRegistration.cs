@@ -8,6 +8,7 @@ public static class WorkersRegistration
     {
         services.AddHostedService<ConversionJobWorker>();
         services.AddHostedService<CleanupWorker>();
+        services.AddHostedService<RecoveryWorker>();
         return services;
     }
 }
