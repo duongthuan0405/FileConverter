@@ -1,7 +1,7 @@
 ﻿using FileConverterService.Application.Repositories;
 using FileConverterService.Domain.Entities;
 using FileConverterService.Infrastructure.Extensions;
-using FileConverterService.Infrastructure.Queues;
+using FileConverterService.Infrastructure.Options;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 using System;

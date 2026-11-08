@@ -1,7 +1,6 @@
 using FileConverterService.Domain.Entities;
-using FileConverterService.Application.Queues;
 
-namespace FileConverterService.Application.Jobs;
+namespace FileConverterService.Application.Repositories;
 
 public interface IConversionJobAtomicOperations
 {
@@ -11,6 +10,9 @@ public interface IConversionJobAtomicOperations
     /// before dispatch; an issued mutation is awaited to completion.
     /// </summary>
     Task SubmitAsync(ConversionJob job, CancellationToken cancellationToken = default);
+
+    /// <summary>Saves a terminal job and its cleanup due time together, before ACK.</summary>
+    Task SaveTerminalAsync(ConversionJob job, CancellationToken cancellationToken = default);
 
     /// <summary>Atomically removes one pending job and records its processing receipt.</summary>
     Task<ConversionJobClaim> ClaimAsync(CancellationToken cancellationToken = default);

@@ -1,8 +1,7 @@
 using FileConverterService.Infrastructure.HelperServices.Storage;
 using FileConverterService.Infrastructure.Converters;
 using Microsoft.Extensions.Options;
-using FileConverterService.Infrastructure.Queues;
-using FileConverterService.Infrastructure.Workers;
+using FileConverterService.Infrastructure.Options;
 
 namespace FileConverterService.Api.Registrations;
 
@@ -13,6 +12,22 @@ public static class ConfigurationOptionsRegistration
         IHostEnvironment environment,
         IConfiguration configuration)
     {
+        services.AddOptions<ReadinessOptions>()
+            .Bind(configuration.GetSection("READINESS"))
+            .Validate(options => options.TimeoutSeconds is > 0 and <= 60,
+                "READINESS:TimeoutSeconds must be between 1 and 60.")
+            .ValidateOnStart();
+
+        services.AddOptions<CleanupOptions>()
+            .Bind(configuration.GetSection("CLEANUP"))
+            .Validate(options => options.RetentionMinutes is > 0 and <= 525600,
+                "CLEANUP:RetentionMinutes must be between 1 and 525600.")
+            .Validate(options => options.IntervalSeconds is > 0 and <= 86400,
+                "CLEANUP:IntervalSeconds must be between 1 and 86400.")
+            .Validate(options => options.BatchSize is > 0 and <= 10000,
+                "CLEANUP:BatchSize must be between 1 and 10000.")
+            .ValidateOnStart();
+
         services.AddOptions<ConversionWorkerOptions>()
             .Bind(configuration.GetSection("WORKER"))
             .Validate(options => options.MaxConcurrentJobs > 0,
@@ -35,6 +50,11 @@ public static class ConfigurationOptionsRegistration
                 "REDIS:BatchKey is require.")
             .Validate(options => !string.IsNullOrWhiteSpace(options.JobKey),
                 "REDIS:JobKey is require.")
+            .Validate(options => !string.IsNullOrWhiteSpace(options.CleanupKey)
+                && options.CleanupKey != options.QueueKey && options.CleanupKey != options.ReceiptKey
+                && options.CleanupKey != options.JobKey && options.CleanupKey != options.BatchKey
+                && !options.CleanupKey.StartsWith(options.JobKey + ":", StringComparison.Ordinal),
+                "REDIS:CleanupKey must be distinct from queue, receipt and metadata keys.")
             .ValidateOnStart();
 
         services.AddOptions<StorageOptions>()

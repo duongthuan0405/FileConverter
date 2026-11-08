@@ -1,4 +1,4 @@
-namespace FileConverterService.Infrastructure.Queues;
+namespace FileConverterService.Infrastructure.Options;
 
 public sealed class RedisOptions
 {
@@ -7,6 +7,7 @@ public sealed class RedisOptions
     public string ReceiptKey { get; set; } = "fileconverter:receipt";
     public string JobKey { get; set; } = "fileconverter:storage:job";
     public string BatchKey { get; set; } = "fileconverter:storage:batch";
+    public string CleanupKey { get; set; } = "fileconverter:cleanup";
 
 
     public int PollIntervalMilliseconds { get; set; } = 250;

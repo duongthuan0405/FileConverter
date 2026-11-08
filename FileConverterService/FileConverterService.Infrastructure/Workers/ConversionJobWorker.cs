@@ -1,12 +1,12 @@
 using FileConverterService.Application.Converters;
-using FileConverterService.Application.Jobs;
 using FileConverterService.Application.HelperServices.Storage;
-using FileConverterService.Application.Queues;
+using FileConverterService.Domain.Entities;
 using FileConverterService.Application.Repositories;
 using FileConverterService.Domain.Enums;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using FileConverterService.Infrastructure.Options;
 
 namespace FileConverterService.Infrastructure.Workers;
 
@@ -95,8 +95,8 @@ public sealed class ConversionJobWorker : BackgroundService
                     job.Fail(exception.Message);
                 }
 
-                await _repository.UpdateAsync(job, stoppingToken);
-                // Only ACK after Complete/Fail has been persisted, not inside the save callback.
+                await _jobAtomicOperations.SaveTerminalAsync(job, stoppingToken);
+                // Only ACK after terminal metadata and cleanup due time have been persisted.
                 await _jobAtomicOperations.AcknowledgeAsync(claim, stoppingToken);
                 if (job.Status == ConversionJobStatus.Completed)
                 {

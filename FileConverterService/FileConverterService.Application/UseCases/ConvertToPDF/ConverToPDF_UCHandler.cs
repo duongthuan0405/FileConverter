@@ -1,5 +1,5 @@
 using FileConverterService.Application.HelperServices.Storage;
-using FileConverterService.Application.Jobs;
+using FileConverterService.Application.Repositories;
 using FileConverterService.Domain.Entities;
 using MediatR;
 using Microsoft.Extensions.Logging;

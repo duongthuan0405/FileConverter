@@ -18,6 +18,10 @@ namespace FileConverterService.Application.Constants
             public static string MaximumFile = "Number of files has to be less than or equal to 5!";
             public static string EmptyFileName = "File name cannot be empty!";
             public static string NullContent = "File content cannot be null!";
+            public const string UnreadableContent = "File content must be readable and support length inspection.";
+            public const string EmptyContent = "File must not be empty.";
+            public const string FileTooLarge = "File size must not exceed 20 MiB.";
+            public const string MimeMismatch = "Content type must match the .doc or .docx file extension.";
         }
     }
 }

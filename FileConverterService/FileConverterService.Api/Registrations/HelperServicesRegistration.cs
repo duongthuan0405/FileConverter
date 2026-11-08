@@ -1,10 +1,11 @@
 using FileConverterService.Application.Converters;
 using FileConverterService.Application.HelperServices.Storage;
 using FileConverterService.Application.Jobs;
-using FileConverterService.Infrastructure.AtomicOperations;
+using FileConverterService.Application.Repositories;
 using FileConverterService.Infrastructure.Converters;
 using FileConverterService.Infrastructure.HelperServices.Storage;
-using FileConverterService.Infrastructure.Queues;
+using FileConverterService.Infrastructure.Options;
+using FileConverterService.Infrastructure.Repositories;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 
@@ -21,6 +22,16 @@ public static class HelperServicesRegistration
             return ConnectionMultiplexer.Connect(options.ConnectionString);
         });
         services.AddSingleton<IConversionJobAtomicOperations, RedisConversionJobAtomicOperations>();
+        services.AddSingleton<IJobCleanupService, JobCleanupService>();
+        services.AddSingleton<IJobCleanupSchedule, FileConverterService.Infrastructure.Repositories.RedisJobCleanupSchedule>();
+        services.AddSingleton(TimeProvider.System);
+        services.AddHttpClient<FileConverterService.Application.Readiness.IReadinessService,
+            FileConverterService.Infrastructure.Readiness.ReadinessService>()
+            .ConfigureHttpClient((provider, client) =>
+            {
+                client.BaseAddress = new Uri(provider.GetRequiredService<IOptions<GotenbergOptions>>().Value.BaseUrl);
+                client.Timeout = Timeout.InfiniteTimeSpan; // Shared readiness deadline controls the HTTP probe.
+            });
         services.AddHttpClient<IDocumentConverter, GotenbergDocumentConverter>()
         .ConfigureHttpClient((serviceProvider, client) =>
         {

@@ -7,6 +7,7 @@ public static class WorkersRegistration
     public static IServiceCollection RegisterWorkers(this IServiceCollection services)
     {
         services.AddHostedService<ConversionJobWorker>();
+        services.AddHostedService<CleanupWorker>();
         return services;
     }
 }

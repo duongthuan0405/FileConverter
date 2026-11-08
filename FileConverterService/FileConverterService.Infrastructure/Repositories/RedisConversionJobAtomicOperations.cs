@@ -1,16 +1,15 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using FileConverterService.Application.Jobs;
-using FileConverterService.Application.Queues;
+using FileConverterService.Application.Repositories;
 using FileConverterService.Domain.Entities;
 using FileConverterService.Domain.Enums;
 using FileConverterService.Infrastructure.Extensions;
-using FileConverterService.Infrastructure.Queues;
+using FileConverterService.Infrastructure.Options;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 
-namespace FileConverterService.Infrastructure.AtomicOperations;
+namespace FileConverterService.Infrastructure.Repositories;
 
 public sealed class RedisConversionJobAtomicOperations : IConversionJobAtomicOperations
 {
@@ -19,6 +18,22 @@ public sealed class RedisConversionJobAtomicOperations : IConversionJobAtomicOpe
     private readonly RedisKey _queueKey;
     private readonly RedisKey _receiptKey;
     private readonly TimeSpan _pollInterval;
+    private readonly RedisKey _cleanupKey;
+    private readonly int _retentionMinutes;
+
+    private const string SaveTerminalScript = """
+        local status = redis.call('HGET', KEYS[1], 'Status')
+        if not status then return -1 end
+        if status ~= '1' and status ~= ARGV[3] then return -1 end
+        if status == ARGV[3] and redis.call('HGET', KEYS[1], 'CompletedAt') ~= ARGV[4] then return -1 end
+        local cleanupType = redis.call('TYPE', KEYS[2]).ok
+        if cleanupType ~= 'none' and cleanupType ~= 'zset' then
+            return redis.error_reply('Cleanup key must be a sorted set')
+        end
+        redis.call('ZADD', KEYS[2], ARGV[2], ARGV[1])
+        redis.call('HSET', KEYS[1], unpack(ARGV, 5))
+        return 1
+        """;
 
     private const string AcknowledgeScript = """
         if redis.call('HGET', KEYS[1], ARGV[1]) == ARGV[2] then
@@ -69,13 +84,47 @@ public sealed class RedisConversionJobAtomicOperations : IConversionJobAtomicOpe
         return 1
         """;
 
-    public RedisConversionJobAtomicOperations(IConnectionMultiplexer connection, IOptions<RedisOptions> options)
+    public RedisConversionJobAtomicOperations(IConnectionMultiplexer connection, IOptions<RedisOptions> options,
+        IOptions<CleanupOptions> cleanupOptions)
     {
         _database = connection.GetDatabase();
         _jobKeyPrefix = options.Value.JobKey;
         _queueKey = options.Value.QueueKey;
         _receiptKey = options.Value.ReceiptKey;
         _pollInterval = TimeSpan.FromMilliseconds(options.Value.PollIntervalMilliseconds);
+        _cleanupKey = options.Value.CleanupKey;
+        _retentionMinutes = cleanupOptions.Value.RetentionMinutes;
+    }
+
+    public async Task SaveTerminalAsync(ConversionJob job, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(job);
+        if (job.Id == Guid.Empty || job.Status is not (ConversionJobStatus.Completed or ConversionJobStatus.Failed)
+            || job.CompletedAt is null)
+            throw new ArgumentException("Only completed or failed jobs with CompletedAt can be saved.", nameof(job));
+
+        RedisKey jobKey = $"{_jobKeyPrefix}:{job.Id}";
+        if (jobKey == _cleanupKey || _cleanupKey == _queueKey || _cleanupKey == _receiptKey)
+            throw new InvalidOperationException("Cleanup key must be distinct from job, queue and receipt keys.");
+        var arguments = new List<RedisValue>
+        {
+            job.Id.ToString("N"),
+            job.CompletedAt.Value.AddMinutes(_retentionMinutes).ToUnixTimeMilliseconds(),
+            JsonSerializer.Serialize(job.Status),
+            JsonSerializer.Serialize(job.CompletedAt)
+        };
+        foreach (var entry in RedisHashExtensions.ToHashEntries(job))
+        {
+            arguments.Add(entry.Name);
+            arguments.Add(entry.Value);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        // Await issued mutations even if the caller is canceled. Both keys must share a slot on Redis Cluster.
+        var result = (long)await _database.ScriptEvaluateAsync(SaveTerminalScript,
+            [jobKey, _cleanupKey], arguments.ToArray());
+        if (result < 0)
+            throw new InvalidOperationException($"Cannot finalize missing job '{job.Id}' or overwrite a different terminal state.");
     }
 
     public async Task AcknowledgeAsync(ConversionJobClaim claim, CancellationToken cancellationToken = default)

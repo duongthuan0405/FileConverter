@@ -100,7 +100,12 @@ async function main() {
     callApi(17, short),
     callApi(18, short),
     callApi(19, short),
-    callApi(20, short)
+    callApi(20, short),
+    callApi(25, short),
+    callApi(24, short),
+    callApi(23, short),
+    callApi(22, short),
+    callApi(21, short),
   ];
 
   await Promise.all(promises);

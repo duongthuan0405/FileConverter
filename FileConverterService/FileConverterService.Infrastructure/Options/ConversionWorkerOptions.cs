@@ -1,4 +1,4 @@
-namespace FileConverterService.Infrastructure.Workers;
+namespace FileConverterService.Infrastructure.Options;
 
 public sealed class ConversionWorkerOptions
 {
