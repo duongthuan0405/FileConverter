@@ -132,7 +132,7 @@ public sealed class ConversionJobWorker : BackgroundService
         }
     }
 
-    private async Task RunHeartbeatAsync(ConversionJobClaim claim, CancellationTokenSource processing,
+    private async Task RunHeartbeatAsync(ConversionJobReceipt claim, CancellationTokenSource processing,
         CancellationToken cancellationToken)
     {
         try
@@ -162,13 +162,13 @@ public sealed class ConversionJobWorker : BackgroundService
         }
     }
 
-    private async IAsyncEnumerable<ConversionJobClaim> ReadJobs(
+    private async IAsyncEnumerable<ConversionJobReceipt> ReadJobs(
     [System.Runtime.CompilerServices.EnumeratorCancellation]
     CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            ConversionJobClaim claim;
+            ConversionJobReceipt claim;
 
             try
             {

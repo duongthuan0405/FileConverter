@@ -148,7 +148,7 @@ public sealed class RedisConversionJobAtomicOperations : IConversionJobAtomicOpe
         _interruptedRetentionMinutes = cleanupOptions.Value.InterruptedRetentionMinutes;
     }
 
-    public async IAsyncEnumerable<ConversionJobClaim> ScanReceiptsAsync(int pageSize,
+    public async IAsyncEnumerable<ConversionJobReceipt> ScanReceiptsAsync(int pageSize,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
@@ -169,12 +169,12 @@ public sealed class RedisConversionJobAtomicOperations : IConversionJobAtomicOpe
                 if (!Guid.TryParseExact(fields[0].ToString(), "N", out var jobId)
                     || !long.TryParse(fields[1].ToString(), out var milliseconds)
                     || milliseconds is < -62135596800000 or > 253402300799999) continue;
-                yield return new ConversionJobClaim(jobId, receiptId, DateTimeOffset.FromUnixTimeMilliseconds(milliseconds));
+                yield return new ConversionJobReceipt(jobId, receiptId, DateTimeOffset.FromUnixTimeMilliseconds(milliseconds));
             }
         }
     }
 
-    public async Task<bool> TryRecoverAsync(ConversionJobClaim claim, DateTimeOffset staleBefore,
+    public async Task<bool> TryRecoverAsync(ConversionJobReceipt claim, DateTimeOffset staleBefore,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(claim);
@@ -190,7 +190,7 @@ public sealed class RedisConversionJobAtomicOperations : IConversionJobAtomicOpe
         return result == 1;
     }
 
-    public async Task MarkProcessingAsync(ConversionJob job, ConversionJobClaim claim, CancellationToken cancellationToken = default)
+    public async Task MarkProcessingAsync(ConversionJob job, ConversionJobReceipt claim, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(job);
         ArgumentNullException.ThrowIfNull(claim);
@@ -210,7 +210,7 @@ public sealed class RedisConversionJobAtomicOperations : IConversionJobAtomicOpe
             throw new InvalidOperationException($"Cannot start job '{job.Id}': stored job is missing or is not Pending.");
     }
 
-    public async Task SaveTerminalAsync(ConversionJob job, ConversionJobClaim claim, CancellationToken cancellationToken = default)
+    public async Task SaveTerminalAsync(ConversionJob job, ConversionJobReceipt claim, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(job);
         ArgumentNullException.ThrowIfNull(claim);
@@ -246,7 +246,7 @@ public sealed class RedisConversionJobAtomicOperations : IConversionJobAtomicOpe
             throw new InvalidOperationException($"Cannot finalize missing job '{job.Id}' or overwrite a different terminal state.");
     }
 
-    public async Task<bool> HeartbeatAsync(ConversionJobClaim claim, CancellationToken cancellationToken = default)
+    public async Task<bool> HeartbeatAsync(ConversionJobReceipt claim, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(claim);
         cancellationToken.ThrowIfCancellationRequested();
@@ -257,7 +257,7 @@ public sealed class RedisConversionJobAtomicOperations : IConversionJobAtomicOpe
         return result == 1;
     }
 
-    public async Task AcknowledgeAsync(ConversionJobClaim claim, CancellationToken cancellationToken = default)
+    public async Task AcknowledgeAsync(ConversionJobReceipt claim, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         // Repeated ACKs are harmless; mismatched receipts must not be removed.
@@ -265,7 +265,7 @@ public sealed class RedisConversionJobAtomicOperations : IConversionJobAtomicOpe
             [claim.JobId.ToString("N")]);
     }
 
-    public async Task<ConversionJobClaim> ClaimAsync(CancellationToken cancellationToken = default)
+    public async Task<ConversionJobReceipt> ClaimAsync(CancellationToken cancellationToken = default)
     {
         while (true)
         {
@@ -283,7 +283,7 @@ public sealed class RedisConversionJobAtomicOperations : IConversionJobAtomicOpe
             if (!value.IsNull)
             {
                 if (Guid.TryParseExact(value.ToString(), "N", out var jobId))
-                    return new ConversionJobClaim(jobId, receiptId,
+                    return new ConversionJobReceipt(jobId, receiptId,
                         DateTimeOffset.FromUnixTimeMilliseconds(heartbeatMilliseconds));
 
                 throw new InvalidOperationException(

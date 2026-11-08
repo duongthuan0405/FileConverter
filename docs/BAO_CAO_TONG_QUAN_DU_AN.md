@@ -139,7 +139,7 @@ Solution `.slnx` tập hợp bốn project dịch vụ. Mỗi `.csproj` khai bá
 | Class/record | File | Trách nhiệm |
 | --- | --- | --- |
 | ConversionJob | Entities/ConversionJob.cs | Entity một job: thông tin file, storage key, trạng thái, thời điểm và lỗi |
-| ConversionJobClaim | Entities/ConversionJobClaim.cs | Record một lần giao job: JobId, ReceiptId và LastHeartbeatAt |
+| ConversionJobReceipt | Entities/ConversionJobReceipt.cs | Class nhận diện một lần giao job cho worker: JobId, ReceiptId và LastHeartbeatAt |
 
 Các thuộc tính của ConversionJob:
 
@@ -167,7 +167,27 @@ Các thuộc tính của ConversionJob:
 
 Các phương thức trên sửa object trong RAM; không tự ghi Redis. Worker gọi atomic operation để lưu trạng thái có điều kiện. Constructor không tham số phục vụ khôi phục object từ metadata.
 
-`ConversionJobClaim` là record có positional constructor nhận JobId, ReceiptId và LastHeartbeatAt (mặc định nếu chưa cung cấp). Record không khai báo method nghiệp vụ; dữ liệu này được truyền giữa worker và các thao tác claim, heartbeat, ACK, recovery. ReceiptId nhận diện một lần giao job, còn LastHeartbeatAt là snapshot nhịp sống tại thời điểm đọc, không tự cập nhật khi Redis thay đổi.
+#### ConversionJobReceipt — vì sao cần entity này?
+
+Khi worker lấy JobId khỏi queue, job không còn trong danh sách chờ nhưng có thể chưa được xử lý xong. Nếu process .NET crash ngay sau đó, chỉ nhìn queue sẽ không biết job đã được nhận rồi bị bỏ dở. Metadata Pending/Processing cũng không đủ để biết worker còn hoạt động hay đã dừng.
+
+Receipt lưu dấu vết của một lần giao job. ClaimAsync tạo hash receipt và lấy job khỏi queue trong cùng Lua script, tránh khoảng hở lấy job ra nhưng chưa ghi nhận ai đang xử lý lần giao đó. 
+
+| Thuộc tính | Công dụng |
+| --- | --- |
+| JobId | Liên kết receipt với metadata của job. |
+| ReceiptId | Định danh riêng của lần nhận job; nếu Pending được recovery đưa lại queue, lần claim sau có ReceiptId mới. |
+| LastHeartbeatAt | Snapshot thời điểm heartbeat gần nhất tại lúc tạo/đọc object; không tự đổi khi Redis được cập nhật. Recovery dùng nó để chọn receipt có khả năng quá hạn rồi kiểm tra lại trong Lua. |
+
+| Method | Công dụng |
+| --- | --- |
+| ConversionJobReceipt(jobId, receiptId, lastHeartbeatAt = default) | Constructor khởi tạo ba thuộc tính chỉ đọc. Class không khai báo thêm method nghiệp vụ; thay đổi dữ liệu Redis do atomic operations thực hiện. |
+
+Receipt phục vụ ba việc: heartbeat báo lần xử lý còn hoạt động; MarkProcessingAsync/SaveTerminalAsync/ACK kiểm tra receipt khớp JobId trước khi ghi hoặc xóa; recovery phát hiện lần giao bị bỏ dở. Sau khi lưu trạng thái kết thúc, ACK xóa receipt. Nếu worker cũ tiếp tục sau khi recovery đã xóa receipt, các thao tác ghi có kiểm tra receipt sẽ bị từ chối, tránh ghi đè kết quả của trạng thái đã được phục hồi.
+
+Ví dụ: job A đã rời queue, còn Pending, receipt R1 tồn tại nhưng worker crash. Khi R1 mất heartbeat quá hạn, recovery đưa A lại queue và xóa R1. Worker nhận lại A sẽ có R2; worker cũ không thể dùng R1 để chuyển A sang Processing. Nếu A đã Processing khi mất heartbeat, recovery chuyển A sang Interrupted và lên lịch cleanup, không tự gửi lại conversion.
+
+Object C# này biểu diễn dữ liệu receipt đã lưu trong Redis Hash; việc đổi từ record sang class không tạo thêm database hoặc thay đổi cấu trúc hash hiện tại.
 
 ### 3.2. Enums
 
@@ -445,7 +465,7 @@ Thực hiện các thay đổi liên quan bằng Lua để lệnh từ client kh
 | --- | --- |
 | Constructor | Nhận connection/options; chuẩn bị database, key/prefix, polling và retention. |
 | SubmitAsync | Yêu cầu job Pending có ID. Tính SHA-256 trên bộ metadata định danh của lần submit; chuyển entity thành các cặp field/value. Lua kiểm tra kiểu dữ liệu, fingerprint rồi ghi hash và LPUSH. Cùng JobId/fingerprint đã có thì không enqueue thêm; khác fingerprint bị từ chối. Nếu LPUSH báo lỗi sau khi tạo hash mới, script cố xóa hash vừa tạo. |
-| ClaimAsync | Lặp cho tới có job hoặc bị hủy. Lua đọc cuối queue, tạo hash receipt gồm JobId/LastHeartbeatAt rồi RPOP trong cùng script; trả ConversionJobClaim. Queue rỗng thì Task.Delay theo polling. |
+| ClaimAsync | Lặp cho tới có job hoặc bị hủy. Lua đọc cuối queue, tạo hash receipt gồm JobId/LastHeartbeatAt rồi RPOP trong cùng script; trả ConversionJobReceipt. Queue rỗng thì Task.Delay theo polling. |
 | GetReceiptKey | Method private tạo key từ prefix và ReceiptId dạng N, kiểm tra không trùng các key dùng chung. |
 | MarkProcessingAsync | Kiểm tra object đã Start và claim khớp job. Lua xác nhận receipt thuộc job, metadata vẫn Pending rồi ghi Status=1, ProccessedAt và xóa Error. Không dùng UpdateAsync chung để tránh ghi bằng receipt đã bị thu hồi. |
 | SaveTerminalAsync | Chỉ nhận Completed/Failed có CompletedAt. Lua kiểm tra receipt thuộc job; metadata còn Processing hoặc đúng trạng thái kết thúc tương thích. Ghi hash và ZADD lịch cleanup trong cùng script. Score bằng CompletedAt cộng retention thường. Lưu lại cùng trạng thái yêu cầu CompletedAt khớp; không tự ACK. |
@@ -664,6 +684,16 @@ Class trong Constants chứa thông báo lỗi mặc định của Api; không c
 
 ## 7. Các luồng hoạt động
 
+Ba worker đều được đăng ký bằng AddHostedService và chạy cùng process .NET của Api. Chúng chạy độc lập, không gọi nhau theo một chuỗi cố định. Redis là nơi lưu dữ liệu để chúng phối hợp:
+
+| Worker | Đầu vào | Trách nhiệm | Khi nào chờ? |
+| --- | --- | --- | --- |
+| ConversionJobWorker | Pending queue | Nhận job, duy trì heartbeat, convert và lưu kết quả | Queue rỗng thì chờ polling; lỗi claim thì chờ 3 giây. Có job thì xử lý tiếp ngay. |
+| CleanupWorker | Sorted Set cleanup | Xóa tài nguyên các job đã đến hạn | Chờ IntervalSeconds sau mỗi batch, kể cả khi còn backlog. |
+| RecoveryWorker | Các hash receipt | Xử lý lần giao job bị bỏ dở do heartbeat quá hạn | Chờ IntervalSeconds sau mỗi vòng quét receipt. |
+
+Conversion worker ghi lịch cleanup sau Completed/Failed; recovery ghi lịch cleanup sau Interrupted. Cleanup worker chỉ đọc các lịch này để dọn khi tới hạn. Host dừng sẽ phát cancellation cho cả ba; nếu process crash, receipt đã lưu trong Redis là dấu vết để recovery xử lý sau khi dịch vụ hoạt động trở lại.
+
 ### 7.1. Luồng use case convert: tiếp nhận và chuyển đổi nền
 
 ```mermaid
@@ -695,6 +725,32 @@ sequenceDiagram
 
 Giữa claim và MarkProcessing, metadata có thể vẫn Pending dù job đã ra queue và có receipt. Recovery xử lý trường hợp worker dừng tại khoảng này.
 
+#### ConversionJobWorker: từng bước của một lần xử lý
+
+API đã lưu input, metadata Pending và enqueue trước khi worker nhận job. Việc trả 202 cho client không phải tín hiệu conversion đã xong.
+
+1. **Khởi tạo các vòng xử lý:** ExecuteAsync tạo MaxConcurrentJobs vòng ProcessJobsAsync. Mỗi vòng xử lý lần lượt từng job; các vòng chạy đồng thời. Vòng chỉ claim tiếp khi đã kết thúc xử lý claim hiện tại, không lấy sẵn cả batch để chờ trong RAM.
+2. **Nhận job:** ReadJobs gọi ClaimAsync. Lua tạo receipt và lấy JobId khỏi queue nguyên tử. Nếu queue rỗng, ClaimAsync chờ PollIntervalMilliseconds rồi thử lại. Nếu claim ném lỗi, ReadJobs log và chờ 3 giây.
+3. **Bắt đầu theo dõi lần giao:** tạo hai CancellationTokenSource riêng cho xử lý và heartbeat, đều liên kết với token host. Khởi chạy RunHeartbeatAsync song song ngay trước khi đọc metadata.
+4. **Đọc và kiểm tra metadata:** yêu cầu ID trong metadata khớp JobId của receipt. Chỉ Pending được đưa vào conversion; các nhánh khác được mô tả ở bảng bên dưới.
+5. **Chuyển Processing:** gọi job.Start() để sửa object trong RAM; MarkProcessingAsync kiểm tra receipt còn hợp lệ và trạng thái Redis còn Pending, rồi mới ghi Processing cùng thời điểm bắt đầu.
+6. **Chuyển đổi và lưu file:** mở input, gửi stream tới Gotenberg. Khi nhận PDF, callback lưu nguyên tử vào output/{jobId:N}.pdf. Sau khi converter và callback hoàn tất, kiểm tra cancellation rồi gọi job.Complete(outputKey).
+7. **Ghi nhận thất bại nếu có:** exception trong bước đọc input/convert/lưu PDF, khi token xử lý chưa bị hủy, được log và gọi job.Fail(error). Nếu token đã bị hủy thì không chuyển sang Failed theo nhánh này.
+8. **Lưu kết quả vào Redis:** kiểm tra token rồi gọi SaveTerminalAsync để ghi Completed/Failed cùng lịch cleanup. Receipt phải còn khớp job. PDF đã lưu chưa đủ để xem là Completed nếu bước ghi Redis này thất bại.
+9. **ACK:** chỉ sau khi lưu terminal thành công mới gọi AcknowledgeAsync để xóa receipt. Metadata, file và lịch cleanup vẫn được giữ.
+10. **Kết thúc lần xử lý:** finally gọi heartbeat.Cancel() và await heartbeatTask để nhịp sống dừng hẳn, rồi vòng xử lý mới nhận job tiếp theo.
+
+| Tình huống | Worker làm gì? | Dữ liệu còn lại cho recovery |
+| --- | --- | --- |
+| Metadata không còn | Log, bỏ qua conversion | Giữ receipt; recovery sẽ bỏ receipt mồ côi khi quá hạn. |
+| ID metadata không khớp | Ném lỗi, log | Không ACK; receipt được giữ để điều tra/xử lý sau. |
+| Job đã Completed/Failed/Interrupted | ACK receipt hiện tại rồi bỏ qua | Không convert lại, không đổi metadata. |
+| Job đã Processing khi đọc | Bỏ qua, không gửi conversion mới | Giữ receipt để recovery xem xét khi heartbeat hết hạn. |
+| MarkProcessing hoặc SaveTerminal lỗi | Log, không chủ động ACK | Receipt còn trong Redis nếu thao tác trước chưa xóa nó. Recovery kiểm tra trạng thái thực tế, không chỉ dựa vào lỗi phía client. |
+| SaveTerminal thành công nhưng ACK lỗi | Log; kết thúc heartbeat | Recovery thấy trạng thái terminal và xóa receipt còn sót. |
+| Heartbeat xác nhận receipt invalid | Hủy token xử lý claim | Các thao tác I/O hỗ trợ cancellation sẽ dừng; kiểm tra receipt trong Lua chặn lần xử lý cũ ghi trạng thái. |
+| Host dừng/crash giữa conversion | Không có bảo đảm lưu được trạng thái kết thúc ngay | Receipt còn lưu giúp recovery phát hiện Processing bị gián đoạn. |
+
 ### 7.2. Heartbeat và quyền ghi trạng thái
 
 Mỗi lần claim tạo một ReceiptId mới và hash receipt riêng. Worker duy trì vòng heartbeat trong lúc đọc input, chuyển đổi, lưu kết quả và ACK:
@@ -708,9 +764,33 @@ Claim thành công, có LastHeartbeatAt ban đầu
 
 Nếu receipt mất hoặc không khớp job, HeartbeatAsync trả false và worker hủy token xử lý claim đó. Lỗi kết nối Redis không bị coi là thu hồi receipt; worker log và thử heartbeat lại.
 
+Heartbeat chờ một interval trước lần gửi đầu tiên; receipt đã có LastHeartbeatAt ban đầu từ ClaimAsync. Mỗi nhịp tiếp theo chờ Task.Delay rồi gọi Redis, nên khoảng cách thực tế còn gồm thời gian gọi Redis. Khi job hoàn tất, nhánh finally dừng heartbeat; không tiếp tục gửi cho job đó trong lúc chờ cleanup. Cancel là yêu cầu hủy có phối hợp, không phải lệnh cưỡng bức dừng engine Gotenberg từ xa.
+
 Heartbeat không thay thế kiểm tra lúc ghi. MarkProcessingAsync kiểm tra receipt và trạng thái Redis còn Pending trước khi ghi Processing. SaveTerminalAsync kiểm tra receipt và trạng thái trước khi lưu Completed/Failed cùng lịch cleanup. Các kiểm tra và thay đổi nằm trong cùng Lua script; receipt đã bị recovery xóa không cho phép worker cũ ghi trạng thái tiếp.
 
 ### 7.3. Luồng cleanup
+
+#### CleanupWorker: từng bước của một vòng
+
+1. **Bắt đầu vòng:** lấy now từ TimeProvider. Vòng đầu chạy ngay khi worker được host khởi động, không đợi interval trước.
+2. **Chọn một batch:** GetDueJobIdsAsync lấy tối đa BatchSize member có score <= now, theo score tăng dần. Member được đọc vẫn nằm trong Sorted Set; đọc lịch chưa đồng nghĩa đã xóa job.
+3. **Dọn từng job:** duyệt tuần tự các JobId trong batch và gọi JobCleanupService.ExecuteAsync(automatic: true). Mỗi job có try/catch riêng, nên lỗi một job không bỏ qua các job còn lại.
+4. **Xác thực trước khi xóa:** service đọc metadata, kiểm tra ID và trạng thái. Chấp nhận Completed/Failed/Interrupted ở chế độ tự động; Pending/Processing không bị dọn bởi nhánh này.
+5. **Xóa file trước:** service gọi xóa output và input rồi chờ Task.WhenAll. File không tồn tại được xem là đã không còn tài nguyên cần dọn, không phải lỗi chặn xóa metadata. Nếu một thao tác ném exception, chưa gọi xóa Redis.
+6. **Xóa Redis sau:** khi các thao tác file hoàn tất, DeleteJobAsync dùng Lua xóa member cleanup và metadata. Receipt không thuộc thao tác cleanup này.
+7. **Hoãn khi lỗi/bỏ qua:** nếu service trả false hoặc ném exception, DeferRetryAsync dời member hiện có tới thời điểm hiện tại + 2 × IntervalSeconds. ZADD XX GT không tạo lại member đã bị xóa và không kéo lịch về sớm hơn.
+8. **Sang vòng sau:** sau khi duyệt hết batch, Task.Delay theo IntervalSeconds rồi lấy batch mới. Nếu truy vấn schedule lỗi thì log và vẫn chờ interval trước lần thử tiếp.
+
+| Tình huống | Kết quả |
+| --- | --- |
+| Job chỉ còn metadata, file đã mất | Vẫn xóa metadata và member cleanup khi trạng thái cho phép. |
+| Member tồn tại nhưng metadata mất | Service xóa member mồ côi, trả false; lời gọi hoãn sau đó không tạo lại member. |
+| Job còn Pending/Processing | Không xóa file/metadata; trả false và hoãn member. |
+| Xóa một file thành công, file kia lỗi | Giữ metadata/lịch; lần sau thử lại. File đã xóa không gây lỗi vì thiếu file được chấp nhận. |
+| Xóa file xong nhưng Redis lỗi | File có thể đã mất, metadata/member có thể còn; vòng sau đọc lại và dọn tiếp. |
+| Hoãn lịch cũng lỗi | Log, tiếp tục job khác; member còn hạn cũ có thể được lấy lại ở vòng sau. |
+
+Ví dụ có 200 job đến hạn, BatchSize=100: vòng đầu xử lý tối đa 100; chờ interval rồi vòng sau lấy phần còn lại cùng các job mới tới hạn. Job lỗi được dời về sau để nhường batch kế tiếp cho các member đến hạn khác nếu thao tác hoãn thành công.
 
 ```text
 Lấy tối đa BatchSize job có score <= now
@@ -732,6 +812,40 @@ Score được lưu khi job kết thúc/gián đoạn. Cleanup lấy score <= no
 Lỗi hoặc bỏ qua: hoãn member tới now + 2 × IntervalSeconds. Metadata đã mất: bỏ member còn sót. Hoãn không tạo lại member đã xóa.
 
 ### 7.4. Luồng recovery
+
+#### RecoveryWorker: từng bước của một vòng
+
+1. **Xác định ngưỡng quá hạn:** tính staleBefore = now - HeartbeatTimeoutSeconds một lần ở đầu vòng. Heartbeat <= ngưỡng là ứng viên recovery; heartbeat mới hơn ngưỡng được bỏ qua trong vòng này.
+2. **Duyệt receipt:** ScanReceiptsAsync quét key receipt theo trang trên các Redis primary, đọc JobId và LastHeartbeatAt. ScanPageSize là kích thước trang gợi ý, không phải số receipt tối đa của cả vòng.
+3. **Lọc ứng viên:** worker so LastHeartbeatAt snapshot với staleBefore. Ví dụ now=10:05:00, timeout=60 giây thì ngưỡng là 10:04:00; heartbeat 10:03:50 được xét, heartbeat 10:04:30 được bỏ qua.
+4. **Kiểm tra lại nguyên tử:** gọi TryRecoverAsync. Lua đọc lại receipt/JobId/heartbeat trong Redis. Nếu worker vừa heartbeat sau lúc SCAN đọc, script thấy heartbeat mới hơn ngưỡng và không recovery receipt đó.
+5. **Rẽ nhánh theo metadata:** Pending được đưa lại queue nếu chưa có; Processing chuyển Interrupted và được lên lịch cleanup; trạng thái terminal hoặc metadata đã mất thì chỉ dọn receipt. Bảng bên dưới mô tả đầy đủ từng nhánh.
+6. **Cô lập lỗi từng receipt:** lỗi TryRecoverAsync được log, worker tiếp tục receipt khác. Nếu lỗi cả quá trình quét thì kết thúc lượt quét đó, log và thử lại ở vòng sau.
+7. **Chờ vòng sau:** sau khi quét xong, chờ RECOVERY__IntervalSeconds. Vòng đầu bắt đầu ngay khi worker khởi động. Receipt vừa trở nên quá hạn trong lúc quét có thể được xét ở vòng tiếp theo.
+
+```mermaid
+flowchart TD
+    A[Bắt đầu vòng recovery] --> B[Tính staleBefore]
+    B --> C[Đọc receipt tiếp theo]
+    C --> D{Heartbeat snapshot quá hạn?}
+    D -- Không --> C
+    D -- Có --> E[Lua kiểm tra lại receipt và heartbeat]
+    E --> F{Vẫn hợp lệ và quá hạn?}
+    F -- Không --> C
+    F -- Có --> G{Trạng thái metadata}
+    G -- Pending --> H[Enqueue nếu chưa có rồi xóa receipt]
+    G -- Processing --> I[Ghi Interrupted và lịch cleanup rồi xóa receipt]
+    G -- Terminal hoặc metadata mất --> J[Xóa receipt]
+    G -- Không nhận diện --> K[Giữ nguyên]
+    H --> C
+    I --> C
+    J --> C
+    K --> C
+    C -- Hết receipt --> L[Chờ interval rồi bắt đầu vòng mới]
+    L --> A
+```
+
+Recovery không mở input, không gọi Gotenberg và không dò PDF để kết luận thành công. Nó dựa trên receipt quá hạn và metadata đang có. Vì vậy Processing sau crash được chuyển Interrupted dù engine có thể đã nhận file; không tự chạy lại một conversion chưa rõ kết quả.
 
 RecoveryWorker được đăng ký AddHostedService và chạy cùng host. Nó quét receipt theo từng trang, lọc heartbeat quá hạn rồi gọi TryRecoverAsync. Lua đọc lại heartbeat và metadata tại thời điểm thực thi, không chỉ tin snapshot từ SCAN.
 

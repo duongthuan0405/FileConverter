@@ -1,0 +1,12 @@
+**/bin
+**/obj
+**/.vs
+**/.idea
+**/.vscode
+**/.env
+**/.env.*
+FileConverterService.Api/Storage
+FileConverterService.Api/Logs
+**/*.user
+**/*.suo
+.git
