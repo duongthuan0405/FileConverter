@@ -1,0 +1,8 @@
+@FileConverterService.Api_HostAddress = http://localhost:5156
+
+@jobId = replace-with-job-id
+
+GET {{FileConverterService.Api_HostAddress}}/api/conversions/job/{{jobId}}/file
+Accept: application/pdf
+
+###

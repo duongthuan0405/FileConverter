@@ -1,0 +1,9 @@
+.vs
+.env
+.env.*
+!.env.example
+!.env.*.example
+obj/
+bin/
+Logs/
+FileConverterService/FileConverterService.Api/Storage

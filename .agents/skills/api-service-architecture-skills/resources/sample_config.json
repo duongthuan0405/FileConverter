@@ -1,0 +1,20 @@
+{
+  "Gotenberg": {
+    "Url": "http://localhost:3000",
+    "TimeoutSeconds": 120
+  },
+  "ConversionSettings": {
+    "MaxFileSizeBytes": 52428800,
+    "AllowedExtensions": [
+      ".docx",
+      ".doc",
+      ".xlsx",
+      ".xls",
+      ".pptx",
+      ".ppt",
+      ".txt",
+      ".html"
+    ],
+    "DefaultTargetFormat": "pdf"
+  }
+}
